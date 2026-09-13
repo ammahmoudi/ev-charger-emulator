@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { renderParameterControl } from "@/components/device-instances/ParameterField";
-import { BottomNav } from "@/components/device-instances/settings/BottomNav";
+import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { compactControlClassName, SettingsFieldRow } from "@/components/device-instances/settings/SettingsFieldRow";
 import { SettingsPager } from "@/components/device-instances/settings/SettingsPager";
@@ -31,6 +31,8 @@ export default function InstanceSettingsPage() {
   const [activeTab, setActiveTab] = useState<ParameterCategory>("DEVICE");
   const [pageIndexByTab, setPageIndexByTab] = useState<Partial<Record<ParameterCategory, number>>>({});
 
+  const [name, setName] = useState("");
+  const [chargePointId, setChargePointId] = useState("");
   const [csmsUrl, setCsmsUrl] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
@@ -46,6 +48,8 @@ export default function InstanceSettingsPage() {
     }
     const data = await res.json();
     setInstance(data.instance);
+    setName(data.instance.name);
+    setChargePointId(data.instance.chargePointId);
     setCsmsUrl(data.instance.csmsUrl);
     const values: Record<string, string> = {};
     for (const p of data.instance.parameters as DeviceInstanceParameterView[]) values[p.key] = p.value ?? "";
@@ -91,7 +95,7 @@ export default function InstanceSettingsPage() {
       const res = await fetch(`/api/device-instances/${instanceId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csmsUrl, parameters: paramValues }),
+        body: JSON.stringify({ name, chargePointId, csmsUrl, parameters: paramValues }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -139,7 +143,15 @@ export default function InstanceSettingsPage() {
         <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="rounded-xl bg-white p-4 shadow-sm dark:bg-zinc-900">
             {activeTab === "DEVICE" ? (
-              <DeviceTabContent instance={instance} parameters={activeParameters} />
+              <DeviceTabContent
+                instance={instance}
+                parameters={activeParameters}
+                name={name}
+                chargePointId={chargePointId}
+                fieldErrors={fieldErrors}
+                onNameChange={setName}
+                onChargePointIdChange={setChargePointId}
+              />
             ) : (
               <>
                 <ParameterPage
@@ -157,19 +169,17 @@ export default function InstanceSettingsPage() {
 
           {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
 
-          {activeTab !== "DEVICE" ? (
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleSave}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            disabled={saving}
+            onClick={handleSave}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
         </div>
 
-        <BottomNav instanceId={instanceId} active="Setting" />
+        <DeviceBottomNav instanceId={instanceId} active="Setting" />
       </div>
     </div>
   );
@@ -178,32 +188,63 @@ export default function InstanceSettingsPage() {
 function DeviceTabContent({
   instance,
   parameters,
+  name,
+  chargePointId,
+  fieldErrors,
+  onNameChange,
+  onChargePointIdChange,
 }: {
   instance: DeviceInstanceDetail;
   parameters: DeviceInstanceParameterView[];
+  name: string;
+  chargePointId: string;
+  fieldErrors: Record<string, string>;
+  onNameChange: (value: string) => void;
+  onChargePointIdChange: (value: string) => void;
 }) {
   const byKey = new Map(parameters.map((p) => [p.key, p]));
-  const [left, right] = splitIntoColumns([
-    { label: "SN", value: instance.chargePointId },
+  const readOnlyRows = [
     { label: "Model", value: `${instance.deviceModel.manufacturer} ${instance.deviceModel.model}` },
     { label: "Firmware", value: byKey.get("firmwareVersion")?.value ?? "—" },
     { label: "UI", value: byKey.get("uiVersion")?.value ?? "—" },
     { label: "CRC", value: byKey.get("crc")?.value ?? "—" },
     { label: "Plug A Firmware", value: byKey.get("plugAFirmwareVersion")?.value ?? "—" },
     { label: "Plug B Firmware", value: byKey.get("plugBFirmwareVersion")?.value ?? "—" },
-  ]);
+  ];
+  const [left, right] = splitIntoColumns(readOnlyRows);
 
   return (
     <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
-      {[left, right].map((column, i) => (
-        <div key={i} className="flex flex-col">
-          {column.map((row) => (
-            <SettingsFieldRow key={row.label} label={row.label}>
-              <span className="font-medium text-zinc-900 dark:text-zinc-50">{row.value}</span>
-            </SettingsFieldRow>
-          ))}
-        </div>
-      ))}
+      <div className="flex flex-col">
+        <SettingsFieldRow label="Name" error={fieldErrors.name}>
+          <input
+            required
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            className={compactControlClassName}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow label="SN" error={fieldErrors.chargePointId}>
+          <input
+            required
+            value={chargePointId}
+            onChange={(e) => onChargePointIdChange(e.target.value)}
+            className={`${compactControlClassName} font-mono`}
+          />
+        </SettingsFieldRow>
+        {left.map((row) => (
+          <SettingsFieldRow key={row.label} label={row.label}>
+            <span className="font-medium text-zinc-900 dark:text-zinc-50">{row.value}</span>
+          </SettingsFieldRow>
+        ))}
+      </div>
+      <div className="flex flex-col">
+        {right.map((row) => (
+          <SettingsFieldRow key={row.label} label={row.label}>
+            <span className="font-medium text-zinc-900 dark:text-zinc-50">{row.value}</span>
+          </SettingsFieldRow>
+        ))}
+      </div>
     </div>
   );
 }
