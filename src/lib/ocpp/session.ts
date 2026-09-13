@@ -100,6 +100,25 @@ export class OcppChargePointSession extends TypedEventEmitter<OcppChargePointSes
     }
   }
 
+  /** Re-sends `BootNotification` on demand (e.g. in response to a `TriggerMessage`). */
+  async triggerBootNotification(): Promise<void> {
+    await this.sendBootNotification();
+  }
+
+  /** Re-sends `Heartbeat` on demand (e.g. in response to a `TriggerMessage`). */
+  async triggerHeartbeat(): Promise<void> {
+    await this.sendHeartbeat();
+  }
+
+  /** Re-sends `StatusNotification` for one connector on demand. Throws if the connector is unknown. */
+  async triggerStatusNotification(connectorId: number): Promise<void> {
+    const info = this.connectors.get(connectorId);
+    if (!info) {
+      throw new Error(`Unknown connectorId ${connectorId}`);
+    }
+    await this.sendStatusNotification(info);
+  }
+
   /** Detaches from the client's lifecycle events and stops all timers. Does not disconnect the client. */
   dispose(): void {
     this.disposed = true;
