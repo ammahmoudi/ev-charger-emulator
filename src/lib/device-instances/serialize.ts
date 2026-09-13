@@ -1,4 +1,25 @@
+import type { DeviceModelConnector } from "@prisma/client";
+
+import { orderModelConnectors } from "./connectors";
+import { getInstanceConnectorStatuses } from "./runtime";
 import { prisma } from "@/lib/prisma";
+
+/** Per-connector summary: static topology from the device model merged with this instance's live, locally-tracked status. */
+function buildConnectorSummaries(instanceId: string, modelConnectors: DeviceModelConnector[]) {
+  const liveByConnectorId = new Map(getInstanceConnectorStatuses(instanceId).map((s) => [s.connectorId, s]));
+
+  return orderModelConnectors(modelConnectors).map((connector) => {
+    const live = liveByConnectorId.get(connector.connectorId);
+    return {
+      connectorId: connector.connectorId,
+      label: connector.displayLabel,
+      connectorType: connector.connectorType,
+      powerType: connector.powerType,
+      status: live?.status ?? null,
+      errorCode: live?.errorCode ?? null,
+    };
+  });
+}
 
 /** Full instance detail: identity/status fields plus the model's parameter schema merged with this instance's current values. */
 export async function serializeDeviceInstance(instanceId: string) {
@@ -6,7 +27,10 @@ export async function serializeDeviceInstance(instanceId: string) {
     where: { id: instanceId },
     include: {
       deviceModel: {
-        include: { parameters: { orderBy: { sortOrder: "asc" } } },
+        include: {
+          parameters: { orderBy: { sortOrder: "asc" } },
+          connectors: true,
+        },
       },
       parameters: true,
     },
@@ -32,6 +56,7 @@ export async function serializeDeviceInstance(instanceId: string) {
       model: instance.deviceModel.model,
       ocppProtocol: instance.deviceModel.ocppProtocol,
     },
+    connectors: buildConnectorSummaries(instance.id, instance.deviceModel.connectors),
     parameters: instance.deviceModel.parameters.map((p) => ({
       deviceModelParameterId: p.id,
       key: p.key,
@@ -51,12 +76,12 @@ export async function serializeDeviceInstance(instanceId: string) {
 
 export type SerializedDeviceInstance = NonNullable<Awaited<ReturnType<typeof serializeDeviceInstance>>>;
 
-/** Summary shape used by the instance list view. */
+/** Summary shape used by the dashboard/instance list view. */
 export async function listDeviceInstances() {
   const instances = await prisma.deviceInstance.findMany({
     orderBy: { createdAt: "desc" },
     include: {
-      deviceModel: { select: { manufacturer: true, model: true } },
+      deviceModel: { select: { manufacturer: true, model: true, connectors: true } },
     },
   });
 
@@ -69,6 +94,7 @@ export async function listDeviceInstances() {
     statusReason: instance.statusReason,
     lastConnectedAt: instance.lastConnectedAt,
     updatedAt: instance.updatedAt,
-    deviceModel: instance.deviceModel,
+    deviceModel: { manufacturer: instance.deviceModel.manufacturer, model: instance.deviceModel.model },
+    connectors: buildConnectorSummaries(instance.id, instance.deviceModel.connectors),
   }));
 }

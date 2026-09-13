@@ -5,7 +5,7 @@ import { startDeviceInstance } from "@/lib/device-instances/runtime";
 import { serializeDeviceInstance } from "@/lib/device-instances/serialize";
 import { Prisma } from "@prisma/client";
 
-/** Starts an instance's OCPP connection. See runtime.ts for the issue #3 stub-connect note. */
+/** Starts an instance's OCPP connection. See runtime.ts for the boot/connectivity wiring. */
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 

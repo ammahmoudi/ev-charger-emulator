@@ -1,6 +1,24 @@
-import type { DeviceConnectionStatus, OcppProtocolVersion, ParameterCategory, ParameterValueType } from "@prisma/client";
+import type {
+  ConnectorType,
+  DeviceConnectionStatus,
+  OcppProtocolVersion,
+  ParameterCategory,
+  ParameterValueType,
+  PowerType,
+} from "@prisma/client";
+import type { OcppChargePointErrorCode, OcppChargePointStatus } from "@/lib/ocpp";
 
 /** Client-side view types matching the JSON shapes returned by the device-instances/device-models API routes. */
+
+/** Static connector topology merged with this instance's live, locally-tracked OCPP status (null until first started). */
+export interface DeviceInstanceConnectorView {
+  connectorId: number;
+  label: string;
+  connectorType: ConnectorType;
+  powerType: PowerType;
+  status: OcppChargePointStatus | null;
+  errorCode: OcppChargePointErrorCode | null;
+}
 
 export interface DeviceInstanceSummary {
   id: string;
@@ -12,6 +30,7 @@ export interface DeviceInstanceSummary {
   lastConnectedAt: string | null;
   updatedAt: string;
   deviceModel: { manufacturer: string; model: string };
+  connectors: DeviceInstanceConnectorView[];
 }
 
 export interface DeviceInstanceParameterView {
@@ -46,6 +65,7 @@ export interface DeviceInstanceDetail {
     model: string;
     ocppProtocol: OcppProtocolVersion;
   };
+  connectors: DeviceInstanceConnectorView[];
   parameters: DeviceInstanceParameterView[];
 }
 
