@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { DiagnosticField } from "@/components/device-instances/DiagnosticField";
+import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { connectorDisplayLabel, type HealthStatus, type OverallHealthView } from "@/lib/device-instances/diagnostics-types";
 import { useDeviceInstanceConnectors } from "@/lib/device-instances/useDeviceInstanceConnectors";
 
@@ -65,20 +67,26 @@ export default function StatusDiagnosticsPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex flex-col gap-1">
-        <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
-          ← {header.name}
-        </Link>
-        <h1 className="text-xl font-semibold text-black dark:text-zinc-50">Status / diagnostics</h1>
-        <p className="text-sm text-zinc-500">{header.deviceModelLabel}</p>
-      </div>
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
+      <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
+        ← {header.name}
+      </Link>
 
-      <p className="text-xs text-zinc-500">
-        Simulated component health. Click any value below to inject/clear a fault for testing — faulted fields render red.
-      </p>
+      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+        <DeviceHeaderBar instanceId={instanceId} title={header.name} />
 
-      <div className="grid grid-cols-1 gap-x-10 divide-y divide-zinc-200 rounded-lg border border-zinc-200 px-4 sm:grid-cols-2 sm:divide-y-0 dark:divide-zinc-800 dark:border-zinc-800">
+        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Status / diagnostics</h1>
+            <p className="text-sm text-zinc-500">{header.deviceModelLabel}</p>
+          </div>
+
+          <p className="text-xs text-zinc-500">
+            Simulated component health. Click any value below to inject/clear a fault for testing — faulted fields
+            render red.
+          </p>
+
+          <div className="grid grid-cols-1 gap-x-10 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-4 sm:grid-cols-2 sm:divide-y-0 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
           <DiagnosticField
             label="Over voltage of Power Supply"
@@ -140,21 +148,25 @@ export default function StatusDiagnosticsPage() {
             </div>
           </div>
         </div>
-      </div>
+          </div>
 
-      {connectors.length > 0 ? (
-        <div className="flex flex-wrap gap-3">
-          {connectors.map((connector) => (
-            <Link
-              key={connector.id}
-              href={`/instances/${instanceId}/status/plugs/${connector.id}`}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              {connectorDisplayLabel(connector)} details
-            </Link>
-          ))}
+          {connectors.length > 0 ? (
+            <div className="flex flex-wrap gap-3">
+              {connectors.map((connector) => (
+                <Link
+                  key={connector.id}
+                  href={`/instances/${instanceId}/status/plugs/${connector.id}`}
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                >
+                  {connectorDisplayLabel(connector)} details
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+
+        <DeviceBottomNav instanceId={instanceId} />
+      </div>
     </div>
   );
 }

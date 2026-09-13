@@ -5,7 +5,9 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { ConnectorAvailabilityBadge } from "@/components/device-instances/ConnectorAvailabilityBadge";
+import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { MaintenanceConfirmPanel } from "@/components/device-instances/MaintenanceConfirmPanel";
+import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import type { DeviceInstanceMaintenanceState } from "@/lib/device-instances/types";
 
 const UPGRADE_POLL_INTERVAL_MS = 700;
@@ -112,39 +114,44 @@ export default function MaintenancePage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex flex-col gap-1">
-        <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
-          ← {instance.name}
-        </Link>
-        <h1 className="text-xl font-semibold text-black dark:text-zinc-50">Maintenance</h1>
-        <p className="text-sm text-zinc-500">
-          {instance.deviceModel.manufacturer} {instance.deviceModel.model}
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
+      <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
+        ← {instance.name}
+      </Link>
 
-      <div className="flex flex-wrap gap-x-4 gap-y-2 border-b border-zinc-200 text-sm dark:border-zinc-800">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => {
-              setActiveTab(tab.key);
-              setMessage(null);
-            }}
-            className={`-mb-px border-b-2 px-1 pb-2 font-medium ${
-              activeTab === tab.key
-                ? "border-blue-600 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+        <DeviceHeaderBar instanceId={instanceId} title={instance.name} />
 
-      <div className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-        {activeTab === "time" ? <TimeSettingPanel /> : null}
+        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Maintenance</h1>
+            <p className="text-sm text-zinc-500">
+              {instance.deviceModel.manufacturer} {instance.deviceModel.model}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-2 border-b border-zinc-200 text-sm dark:border-zinc-800">
+            {TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  setMessage(null);
+                }}
+                className={`-mb-px border-b-2 px-1 pb-2 font-medium ${
+                  activeTab === tab.key
+                    ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                    : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+            {activeTab === "time" ? <TimeSettingPanel /> : null}
 
         {activeTab === "events" ? (
           <MaintenanceConfirmPanel
@@ -259,9 +266,13 @@ export default function MaintenancePage() {
             </div>
           </div>
         ) : null}
-      </div>
+          </div>
 
-      {message ? <p className="text-sm text-zinc-600 dark:text-zinc-400">{message}</p> : null}
+          {message ? <p className="text-sm text-zinc-600 dark:text-zinc-400">{message}</p> : null}
+        </div>
+
+        <DeviceBottomNav instanceId={instanceId} active="Maintenance" />
+      </div>
     </div>
   );
 }
