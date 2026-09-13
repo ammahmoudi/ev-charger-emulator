@@ -1,5 +1,8 @@
-// Domain models (device models, device instances, parameters, session/event history)
-// are added in issue #5 — this scaffold only wires up Prisma + Postgres.
+// Domain models: device models (reusable charger-family templates), their connector
+// topology, and their typed configuration-parameter schema. Added in issue #5.
+//
+// Device *instances* (a device model configured and connected to a CSMS) are out of
+// scope here — see issue #3.
 
 generator client {
   provider = "prisma-client-js"
@@ -8,4 +11,129 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+/// OCPP protocol version a device model speaks.
+enum OcppProtocolVersion {
+  OCPP_1_6
+  OCPP_2_0_1
+}
+
+/// Physical connector type, roughly following common OCPP connectorType values.
+enum ConnectorType {
+  CCS1
+  CCS2
+  CHADEMO
+  TYPE_1
+  TYPE_2
+  GBT_AC
+  GBT_DC
+  TESLA
+  OTHER
+}
+
+/// Whether a connector delivers AC or DC power.
+enum PowerType {
+  AC
+  DC
+}
+
+/// Which settings tab a parameter definition is shown under on the real device,
+/// mirrored from the PEVC3107E Setting screen tabs (Device/System/Networks/Fee Rate/Other).
+enum ParameterCategory {
+  DEVICE
+  SYSTEM
+  NETWORKS
+  FEE_RATE
+  OTHER
+}
+
+/// The primitive type a parameter's value should be parsed/validated as.
+enum ParameterValueType {
+  STRING
+  INTEGER
+  FLOAT
+  BOOLEAN
+  ENUM
+}
+
+/// A reusable charger-family template (e.g. "PEVC3107E") that device instances are
+/// created from. Holds identity, connector topology, and the typed parameter schema
+/// describing every configurable field shown across the device's settings tabs.
+model DeviceModel {
+  id           String   @id @default(cuid())
+  manufacturer String
+  brand        String?
+  model        String
+  ocppProtocol OcppProtocolVersion
+  description  String?
+
+  connectors  DeviceModelConnector[]
+  parameters  DeviceModelParameter[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([manufacturer, model])
+}
+
+/// One physical connector (EVSE + connector index) on a device model, e.g. "Plug A".
+model DeviceModelConnector {
+  id            String @id @default(cuid())
+  deviceModelId String
+  deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
+
+  /// 1-based EVSE index, matching the OCPP evseId/connector numbering the device boots with.
+  evseIndex Int
+  /// 1-based connector index within the EVSE (almost always 1 for single-connector EVSEs).
+  connectorIndex Int
+  /// Human label as shown on the device, e.g. "Plug A".
+  label String?
+
+  connectorType ConnectorType
+  powerType     PowerType
+  maxAmperage   Float?
+  maxVoltage    Float?
+  maxPowerKw    Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceModelId, evseIndex, connectorIndex])
+  @@index([deviceModelId])
+}
+
+/// A single typed configuration field belonging to a device model's parameter schema
+/// (one row per settings-screen field), letting new models define their own settings
+/// surface without new tables. `defaultValue` is stored as text and interpreted per
+/// `valueType`; `enumOptions` is populated only when `valueType` is ENUM.
+model DeviceModelParameter {
+  id            String @id @default(cuid())
+  deviceModelId String
+  deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
+
+  /// Machine key, e.g. "powerSupplyQuantity".
+  key   String
+  /// Human label as shown on the device, e.g. "Power supply quantity".
+  label String
+
+  category  ParameterCategory
+  valueType ParameterValueType
+
+  /// Unit of measure, e.g. "kW", "V", "A", "%", "s", "degC".
+  unit String?
+
+  defaultValue String?
+  enumOptions  String[]
+  minValue     Float?
+  maxValue     Float?
+
+  description String?
+  sortOrder   Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceModelId, key])
+  @@index([deviceModelId])
 }
