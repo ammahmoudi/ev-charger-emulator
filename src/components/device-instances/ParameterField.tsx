@@ -2,7 +2,7 @@
 
 import type { DeviceInstanceParameterView, DeviceModelParameterSchema } from "@/lib/device-instances/types";
 
-type FieldSchema = DeviceInstanceParameterView | DeviceModelParameterSchema;
+export type FieldSchema = DeviceInstanceParameterView | DeviceModelParameterSchema;
 
 interface ParameterFieldProps {
   schema: FieldSchema;
@@ -21,18 +21,24 @@ export function ParameterField({ schema, value, error, onChange }: ParameterFiel
         {schema.label}
         {schema.unit ? <span className="text-zinc-400"> ({schema.unit})</span> : null}
       </label>
-      {renderInput(schema, value, onChange)}
+      {renderParameterControl(schema, value, onChange, inputClassName)}
       {schema.description ? <p className="text-xs text-zinc-500">{schema.description}</p> : null}
       {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
     </div>
   );
 }
 
-function renderInput(schema: FieldSchema, value: string, onChange: (value: string) => void) {
+/** Renders just the input/select control for a parameter's value, reusable outside the label/description layout above. */
+export function renderParameterControl(
+  schema: FieldSchema,
+  value: string,
+  onChange: (value: string) => void,
+  className: string,
+) {
   switch (schema.valueType) {
     case "BOOLEAN":
       return (
-        <select className={inputClassName} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select className={className} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">(unset)</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -41,7 +47,7 @@ function renderInput(schema: FieldSchema, value: string, onChange: (value: strin
 
     case "ENUM":
       return (
-        <select className={inputClassName} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select className={className} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">(unset)</option>
           {schema.enumOptions.map((option) => (
             <option key={option} value={option}>
@@ -59,13 +65,13 @@ function renderInput(schema: FieldSchema, value: string, onChange: (value: strin
           step={schema.valueType === "FLOAT" ? "any" : "1"}
           min={schema.minValue ?? undefined}
           max={schema.maxValue ?? undefined}
-          className={inputClassName}
+          className={className}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
       );
 
     default:
-      return <input type="text" className={inputClassName} value={value} onChange={(e) => onChange(e.target.value)} />;
+      return <input type="text" className={className} value={value} onChange={(e) => onChange(e.target.value)} />;
   }
 }

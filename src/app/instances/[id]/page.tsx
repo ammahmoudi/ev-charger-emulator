@@ -2,15 +2,10 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { ParameterField } from "@/components/device-instances/ParameterField";
 import { StatusBadge } from "@/components/device-instances/StatusBadge";
-import {
-  PARAMETER_CATEGORY_LABELS,
-  PARAMETER_CATEGORY_ORDER,
-  type DeviceInstanceDetail,
-} from "@/lib/device-instances/types";
+import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
 
 export default function InstanceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -23,7 +18,6 @@ export default function InstanceDetailPage() {
   const [name, setName] = useState("");
   const [chargePointId, setChargePointId] = useState("");
   const [csmsUrl, setCsmsUrl] = useState("");
-  const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -41,9 +35,6 @@ export default function InstanceDetailPage() {
     setName(data.instance.name);
     setChargePointId(data.instance.chargePointId);
     setCsmsUrl(data.instance.csmsUrl);
-    const values: Record<string, string> = {};
-    for (const p of data.instance.parameters) values[p.key] = p.value ?? "";
-    setParamValues(values);
   }
 
   useEffect(() => {
@@ -51,14 +42,6 @@ export default function InstanceDetailPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
-
-  const parametersByCategory = useMemo(() => {
-    if (!instance) return [];
-    return PARAMETER_CATEGORY_ORDER.map((category) => ({
-      category,
-      parameters: instance.parameters.filter((p) => p.category === category),
-    })).filter((group) => group.parameters.length > 0);
-  }, [instance]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -69,7 +52,7 @@ export default function InstanceDetailPage() {
       const res = await fetch(`/api/device-instances/${instanceId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, chargePointId, csmsUrl, parameters: paramValues }),
+        body: JSON.stringify({ name, chargePointId, csmsUrl }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -157,6 +140,12 @@ export default function InstanceDetailPage() {
         >
           {isRunning ? "Stop" : "Start"}
         </button>
+        <Link
+          href={`/instances/${instanceId}/settings`}
+          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Settings
+        </Link>
         <button
           type="button"
           onClick={handleDelete}
@@ -200,23 +189,6 @@ export default function InstanceDetailPage() {
           />
           {fieldErrors.csmsUrl ? <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.csmsUrl}</p> : null}
         </div>
-
-        {parametersByCategory.map(({ category, parameters }) => (
-          <fieldset key={category} className="flex flex-col gap-3 border-t border-zinc-200 pt-5 dark:border-zinc-800">
-            <legend className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-              {PARAMETER_CATEGORY_LABELS[category]}
-            </legend>
-            {parameters.map((p) => (
-              <ParameterField
-                key={p.deviceModelParameterId}
-                schema={p}
-                value={paramValues[p.key] ?? ""}
-                error={fieldErrors[p.key]}
-                onChange={(value) => setParamValues((prev) => ({ ...prev, [p.key]: value }))}
-              />
-            ))}
-          </fieldset>
-        ))}
 
         {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
 
