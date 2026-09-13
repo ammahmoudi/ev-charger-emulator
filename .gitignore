@@ -5,3 +5,8 @@ node_modules/
 dist/
 *.log
 
+# Raw exports from a real CSMS dev DB/logs (SIM ICCID/IMSI, serials, real
+# session data, real deployment location codes) — never commit these.
+# See docs/data-fixtures.md for where they actually live.
+fixtures/raw/
+
