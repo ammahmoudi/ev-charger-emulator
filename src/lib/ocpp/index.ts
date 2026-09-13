@@ -1,5 +1,15 @@
 export { OcppClient } from "./client";
 export { OcppCallError, OcppConnectionClosedError, OcppTimeoutError } from "./errors";
+export { InMemoryConfigurationStore } from "./in-memory-configuration-store";
+export { registerRemoteCommandHandlers } from "./remote-commands";
+export {
+  type OcppActiveTransaction,
+  type OcppChangeConfigurationStatus,
+  type OcppConfigurationEntry,
+  type OcppConfigurationStore,
+  type RemoteCommandHandlers,
+  type RemoteCommandHandlersDeps,
+} from "./remote-command-types";
 export { OcppChargePointSession } from "./session";
 export {
   type OcppBootStatus,
