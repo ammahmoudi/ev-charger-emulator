@@ -152,6 +152,12 @@ export default function InstanceDetailPage() {
         >
           Status / diagnostics
         </Link>
+        <Link
+          href={`/instances/${instanceId}/device-test`}
+          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          Device (hardware test)
+        </Link>
         <button
           type="button"
           onClick={handleDelete}
