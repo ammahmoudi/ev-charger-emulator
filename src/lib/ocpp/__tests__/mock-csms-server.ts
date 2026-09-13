@@ -34,6 +34,11 @@ export class MockCsmsServer {
     return new Promise((resolve) => this.wss.once("connection", (ws) => resolve(ws)));
   }
 
+  /** Resolves with the next new client connection, ignoring any already established. */
+  async waitForNextConnection(): Promise<WebSocket> {
+    return new Promise((resolve) => this.wss.once("connection", (ws) => resolve(ws)));
+  }
+
   async close(): Promise<void> {
     for (const ws of this.connections) {
       ws.terminate();
