@@ -1,0 +1,51 @@
+# Dockerfile.ir - ev-yar (Iran) deployment build using EVYAR internal mirrors.
+# See Dockerfile for the plain/local-dev equivalent (Docker Hub base image, public npm registry).
+ARG NODE_IMAGE=git.ev-yar.ir/evyar/node:22-alpine
+ARG NPM_REGISTRY=http://89.42.199.156:4873/
+ARG VERSION=latest
+ARG BUILD_DATE
+
+FROM ${NODE_IMAGE} AS install
+ENV NODE_ENV=development
+WORKDIR /opt/app
+ARG NPM_REGISTRY
+# Prisma's query engine dynamically links against OpenSSL; Alpine doesn't ship it by default.
+RUN apk add --no-cache openssl
+RUN npm config set registry "$NPM_REGISTRY" \
+    && npm config set replace-registry-host always \
+    && npm config set audit false \
+    && npm config set fund false
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM install AS build
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+# One-shot migration + seed runner (see dokploy's separate "ev-charger-emulator-migrate"
+# application, which builds this stage and runs once per deploy) — seeds the PEVC3107E
+# device model plus a ready-to-click "Demo PEVC3107E" instance, matching the local dev flow.
+FROM build AS migrate
+CMD ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed"]
+
+# Minimal production runtime: just the traced `next build` standalone server, no
+# devDependencies, no Prisma CLI, no app source.
+FROM ${NODE_IMAGE} AS runtime
+ARG VERSION
+ARG BUILD_DATE
+LABEL org.opencontainers.image.version="${VERSION:-latest}"
+LABEL org.opencontainers.image.created="${BUILD_DATE:-unknown}"
+ENV NODE_ENV=production
+WORKDIR /opt/app
+RUN apk add --no-cache openssl
+RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
+COPY --from=build --chown=nextjs:nodejs /opt/app/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /opt/app/.next/static ./.next/static
+USER nextjs
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:3000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+CMD ["node", "server.js"]
