@@ -148,3 +148,20 @@ export function disposeDeviceInstance(instanceId: string): void {
 export function getInstanceConnectorStatuses(instanceId: string): OcppConnectorStatusInfo[] {
   return registry.get(instanceId)?.session.listConnectorStatuses() ?? [];
 }
+
+/**
+ * Returns (creating if needed) the {@link OcppChargePointSession} wrapping an instance's
+ * `OcppClient` — the same session `startDeviceInstance`/`createEntry` use, so local
+ * connector-status changes made through it (e.g. from the device-test hardware UI, issue
+ * #16) are visible to anything else reading connector status (e.g. `getInstanceConnectorStatuses`,
+ * the dashboard's connector chips) and are tracked immediately regardless of connection
+ * state — matching real hardware, where a local panel action always updates the panel even
+ * when the CSMS link is down. Never opens the WebSocket itself; that's `startDeviceInstance`'s job.
+ */
+export async function getOrCreateChargePointSession(instanceId: string): Promise<OcppChargePointSession> {
+  const instance = await prisma.deviceInstance.findUniqueOrThrow({
+    where: { id: instanceId },
+    include: { deviceModel: { include: { connectors: true } } },
+  });
+  return getOrCreateEntry(instance).session;
+}
