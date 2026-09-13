@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { ActionButtonGroup, Readout } from "@/components/device-test/Readout";
 import type {
   ChargingOutputMode,
@@ -25,7 +27,20 @@ export default function DeviceTestPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("chargingTest");
   const [pending, setPending] = useState(false);
+  const [instanceName, setInstanceName] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadInstance = useCallback(async () => {
+    const res = await fetch(`/api/device-instances/${instanceId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setInstanceName(data.instance.name);
+  }, [instanceId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on route param change, not derived state
+    loadInstance();
+  }, [loadInstance]);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/device-instances/${instanceId}/device-test`);
@@ -119,45 +134,54 @@ export default function DeviceTestPage() {
   ];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex flex-col gap-1">
-        <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
-          ← Instance
-        </Link>
-        <h1 className="text-xl font-semibold text-black dark:text-zinc-50">Device (hardware test)</h1>
-        <p className="text-sm text-zinc-500">Manual hardware diagnostics — mirrors the bottom-nav &quot;Device&quot; screen.</p>
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
+      <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
+        ← {instanceName ?? "Instance"}
+      </Link>
+
+      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+        <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Device (hardware test)"} />
+
+        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Device (hardware test)</h1>
+            <p className="text-sm text-zinc-500">Manual hardware diagnostics.</p>
+          </div>
+
+          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+
+          <div className="flex flex-wrap gap-2 border-b border-zinc-200 pb-2 dark:border-zinc-800">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                  tab === t.key
+                    ? "bg-black text-white dark:bg-white dark:text-black"
+                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === "chargingTest" ? (
+            <ChargingTestTab state={state} pending={pending} runAction={runAction} updateSettings={updateSettings} />
+          ) : tab === "pile" ? (
+            <PileTestTab state={state} pending={pending} runAction={runAction} />
+          ) : (
+            <PlugTestTab
+              plug={state.plugs.find((p) => `plug:${p.connectorId}` === tab)!}
+              pending={pending}
+              runAction={runAction}
+            />
+          )}
+        </div>
+
+        <DeviceBottomNav instanceId={instanceId} active="Device" />
       </div>
-
-      {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
-      <div className="flex flex-wrap gap-2 border-b border-zinc-200 pb-2 dark:border-zinc-800">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              tab === t.key
-                ? "bg-black text-white dark:bg-white dark:text-black"
-                : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "chargingTest" ? (
-        <ChargingTestTab state={state} pending={pending} runAction={runAction} updateSettings={updateSettings} />
-      ) : tab === "pile" ? (
-        <PileTestTab state={state} pending={pending} runAction={runAction} />
-      ) : (
-        <PlugTestTab
-          plug={state.plugs.find((p) => `plug:${p.connectorId}` === tab)!}
-          pending={pending}
-          runAction={runAction}
-        />
-      )}
     </div>
   );
 }

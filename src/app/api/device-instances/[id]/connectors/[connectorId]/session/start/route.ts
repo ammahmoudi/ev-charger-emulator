@@ -10,8 +10,8 @@ interface StartBody {
 }
 
 /**
- * Starts a locally-simulated charging session on a connector (the UI-triggerable counterpart
- * to issue #9's `SimulatedChargingSession`). Body: `{ idTag: string, chargeRateKw: number }`.
+ * Starts a locally-simulated charging session on a connector.
+ * Body: `{ idTag: string, chargeRateKw: number }`.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; connectorId: string }> }) {
   const { id, connectorId: connectorIdParam } = await params;

@@ -60,11 +60,10 @@ function ConnectorGlyph({ className }: { className?: string }) {
 }
 
 /**
- * Per-connector charging status card — the Home screen's core UI element (issue #2), mirroring
+ * Per-connector charging status card — the Home screen's core UI element, mirroring
  * the real device's Plug A/B cards: connector type, idle prompt or live charging readout, and a
- * Charging/Stop button. Backed by `connector-sessions.ts`'s DB-persisted session state (the
- * module actually wired into the live instance runtime — see runtime.ts and the local-simulation
- * dead-code note in this PR's description) rather than issue #9's `SimulatedChargingSession`.
+ * Charging/Stop button. Backed by `connector-sessions.ts`'s DB-persisted session state, the
+ * module actually wired into the live instance runtime — see runtime.ts.
  */
 export function ConnectorChargeCard({
   connector,

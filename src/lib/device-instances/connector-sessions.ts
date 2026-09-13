@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 const WH_PER_KWH = 1000;
 const MS_PER_HOUR = 3_600_000;
 
-/** Rounds to 2 decimal places, same convention as `SimulatedChargingSession` (issue #9). */
+/** Rounds to 2 decimal places. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -155,10 +155,9 @@ export async function clearConnectorFault(deviceInstanceId: string, connectorId:
 }
 
 /**
- * Starts a locally-simulated charging session on a connector — the UI-triggerable counterpart
- * to `SimulatedChargingSession` (issue #9), which drives the same energy math but over a real
- * OCPP connection to a CSMS. This module persists connector/session state directly instead,
- * so the Cost/Event/Lock screens have real data to show without requiring a live CSMS.
+ * Starts a locally-simulated charging session on a connector. This module persists
+ * connector/session state directly, so the Cost/Event/Lock screens have real data to show
+ * without requiring a live CSMS.
  */
 export async function startChargingSession(
   deviceInstanceId: string,
