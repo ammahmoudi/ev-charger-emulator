@@ -39,12 +39,43 @@ Planned device/connector shape (also mirrored in the CSMS's own device-model cat
   any CSMS via a configurable WS URL (e.g. `ws://<csms-host>/ocpp/<chargePointId>`)
 - No authentication in v1 — this runs as a local/dev-only testing tool
 
+### Per-instance CSMS URL
+
+Each device instance has its own `csmsUrl` (a `ws://` or `wss://` WebSocket URL), set when you
+create the instance and editable afterwards from its **Networks** tab. It's stored in Postgres per
+instance and read at connect time — there's no global/env-configured CSMS endpoint, so one running
+app can have different instances pointed at different CSMS dev/staging environments at once.
+
 ## Local development
+
+The primary, documented way to run this locally is `npm run dev` against Postgres in Docker:
 
 ```
 cp .env.example .env
-docker compose up -d      # Postgres on localhost:5442
+docker compose up -d       # Postgres on localhost:5442
 npm install
 npm run db:generate
-npm run dev                # http://localhost:3000, GET /api/health checks DB connectivity
+npm run db:migrate         # applies migrations (prompts for a name if the schema changed)
+npm run db:seed            # seeds the PEVC3107E device model + a ready-to-go "Demo PEVC3107E" instance
+npm run dev                 # http://localhost:3000, GET /api/health checks DB connectivity
 ```
+
+Open [http://localhost:3000/instances](http://localhost:3000/instances) — the seeded "Demo
+PEVC3107E" instance is there to click into immediately. Its CSMS URL is a placeholder
+(`ws://localhost:9000/DEMO-PEVC3107E-01`); edit it from the instance's Networks tab to point at a
+real CSMS dev/staging endpoint.
+
+### Running the app in Docker too (optional)
+
+If you'd rather not install Node locally, `docker-compose.yml` also has an app image + a one-off
+migration/seed job, behind the `full` [Compose profile](https://docs.docker.com/compose/how-tos/profiles/)
+so they don't affect the `docker compose up -d` flow above:
+
+```
+docker compose --profile full up --build
+```
+
+This builds and starts Postgres, runs `prisma migrate deploy` + the seed script once, then starts
+the app on [http://localhost:3000](http://localhost:3000) — no local `npm install` or manual DB
+setup needed. Re-running it is safe: pending migrations are applied and the seed script leaves an
+already-seeded "Demo PEVC3107E" instance as-is.

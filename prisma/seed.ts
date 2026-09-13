@@ -586,6 +586,10 @@ const pevc3107eParameters: ParameterSeed[] = [
   },
 ];
 
+// Charge point identity for the out-of-the-box sample instance created below, so a fresh
+// clone has something to click into immediately (issue #7).
+const SAMPLE_INSTANCE_CHARGE_POINT_ID = "DEMO-PEVC3107E-01";
+
 async function seedPevc3107e() {
   const deviceModel = await prisma.deviceModel.upsert({
     where: { manufacturer_model: { manufacturer: "PEVC", model: "PEVC3107E" } },
@@ -681,10 +685,55 @@ async function seedPevc3107e() {
   console.log(
     `Seeded device model ${deviceModel.manufacturer} ${deviceModel.model} with ${connectors.length} connectors and ${pevc3107eParameters.length} parameters.`,
   );
+
+  return deviceModel.id;
+}
+
+/**
+ * Creates one ready-to-go DeviceInstance from the PEVC3107E model so a fresh clone has
+ * something to click into immediately (issue #7), instead of only the DeviceModel catalog
+ * entry seeded above. Its CSMS URL is a local placeholder — edit it from the instance's
+ * Networks tab to point at a real CSMS dev/staging endpoint before connecting.
+ *
+ * Skips creation if an instance with this chargePointId already exists, so re-running the
+ * seed never clobbers a demo instance you've since edited (e.g. pointed at a real CSMS).
+ */
+async function seedSampleInstance(deviceModelId: string) {
+  const existing = await prisma.deviceInstance.findUnique({
+    where: { chargePointId: SAMPLE_INSTANCE_CHARGE_POINT_ID },
+  });
+  if (existing) {
+    console.log(`Sample device instance "${SAMPLE_INSTANCE_CHARGE_POINT_ID}" already exists, leaving it as-is.`);
+    return;
+  }
+
+  const parameters = await prisma.deviceModelParameter.findMany({ where: { deviceModelId } });
+
+  const instance = await prisma.deviceInstance.create({
+    data: {
+      deviceModelId,
+      name: "Demo PEVC3107E",
+      chargePointId: SAMPLE_INSTANCE_CHARGE_POINT_ID,
+      csmsUrl: `ws://localhost:9000/${SAMPLE_INSTANCE_CHARGE_POINT_ID}`,
+      parameters: {
+        create: parameters.map((parameter) => ({
+          deviceModelParameterId: parameter.id,
+          key: parameter.key,
+          value: parameter.defaultValue,
+        })),
+      },
+    },
+  });
+
+  console.log(
+    `Seeded sample device instance "${instance.name}" (chargePointId=${instance.chargePointId}, ` +
+      `csmsUrl=${instance.csmsUrl}). Edit its CSMS URL from the Networks tab before connecting to a real CSMS.`,
+  );
 }
 
 async function main() {
-  await seedPevc3107e();
+  const deviceModelId = await seedPevc3107e();
+  await seedSampleInstance(deviceModelId);
 }
 
 main()
