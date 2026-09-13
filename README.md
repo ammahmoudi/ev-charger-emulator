@@ -41,4 +41,10 @@ Planned device/connector shape (also mirrored in the CSMS's own device-model cat
 
 ## Local development
 
-Not yet scaffolded — tracked in the repo's Issues.
+```
+cp .env.example .env
+docker compose up -d      # Postgres on localhost:5442
+npm install
+npm run db:generate
+npm run dev                # http://localhost:3000, GET /api/health checks DB connectivity
+```
