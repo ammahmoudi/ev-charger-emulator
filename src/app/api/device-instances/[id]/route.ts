@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { disposeDiagnosticState } from "@/lib/device-instances/diagnostics";
 import { disposeDeviceInstance } from "@/lib/device-instances/runtime";
 import { badRequest, isUniqueConstraintError, isValidWebSocketUrl, notFound } from "@/lib/device-instances/http";
 import { ParameterValidationError, validateParameterValue } from "@/lib/device-instances/parameters";
@@ -113,6 +114,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   if (!existing) return notFound("Device instance not found");
 
   disposeDeviceInstance(id);
+  disposeDiagnosticState(id);
   await prisma.deviceInstance.delete({ where: { id } });
 
   return new NextResponse(null, { status: 204 });
