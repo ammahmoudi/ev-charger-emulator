@@ -56,6 +56,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     data.csmsUrl = body.csmsUrl.trim();
   }
 
+  // Changing the CSMS URL invalidates any runtime client already bound to the old one — drop
+  // it so the next start rebuilds against the new URL instead of silently reconnecting to the old.
+  if (data.csmsUrl !== undefined && data.csmsUrl !== existing.csmsUrl) {
+    disposeDeviceInstance(id);
+  }
+
   let parameterUpdates: { key: string; deviceModelParameterId: string; value: string | null }[] = [];
   if (body.parameters !== undefined) {
     if (typeof body.parameters !== "object" || body.parameters === null) {
