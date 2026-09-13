@@ -98,3 +98,52 @@ export async function listDeviceInstances() {
     connectors: buildConnectorSummaries(instance.id, instance.deviceModel.connectors),
   }));
 }
+
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  pageCount: number;
+  totalCount: number;
+}
+
+const DEFAULT_PAGE_SIZE = 10;
+
+/** Paginated Event log for an instance (issue #14's Event screen), newest first. */
+export async function listDeviceInstanceEvents(
+  deviceInstanceId: string,
+  page: number,
+  pageSize: number = DEFAULT_PAGE_SIZE,
+): Promise<PagedResult<{ id: string; type: string; description: string; occurredAt: Date }>> {
+  const totalCount = await prisma.deviceInstanceEvent.count({ where: { deviceInstanceId } });
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const clampedPage = Math.min(Math.max(1, page), pageCount);
+
+  const items = await prisma.deviceInstanceEvent.findMany({
+    where: { deviceInstanceId },
+    orderBy: { occurredAt: "desc" },
+    skip: (clampedPage - 1) * pageSize,
+    take: pageSize,
+  });
+
+  return { items, page: clampedPage, pageCount, totalCount };
+}
+
+/** Paginated session/cost history for an instance (issue #14's Cost screen), newest first. */
+export async function listDeviceInstanceSessions(
+  deviceInstanceId: string,
+  page: number,
+  pageSize: number = DEFAULT_PAGE_SIZE,
+) {
+  const totalCount = await prisma.deviceInstanceSession.count({ where: { deviceInstanceId } });
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const clampedPage = Math.min(Math.max(1, page), pageCount);
+
+  const items = await prisma.deviceInstanceSession.findMany({
+    where: { deviceInstanceId },
+    orderBy: { startedAt: "desc" },
+    skip: (clampedPage - 1) * pageSize,
+    take: pageSize,
+  });
+
+  return { items, page: clampedPage, pageCount, totalCount };
+}

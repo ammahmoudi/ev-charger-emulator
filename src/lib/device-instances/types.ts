@@ -106,3 +106,63 @@ export const PARAMETER_CATEGORY_LABELS: Record<ParameterCategory, string> = {
 };
 
 export const PARAMETER_CATEGORY_ORDER: ParameterCategory[] = ["DEVICE", "SYSTEM", "NETWORKS", "FEE_RATE", "OTHER"];
+
+/** One row of an instance's Event log (issue #14's Event screen). */
+export interface DeviceInstanceEventView {
+  id: string;
+  type: string;
+  description: string;
+  occurredAt: string;
+}
+
+/** One completed session row for the Cost/session-history screen (issue #14). */
+export interface DeviceInstanceSessionView {
+  id: string;
+  connectorId: number;
+  connectorLabel: string | null;
+  idTag: string;
+  startedAt: string;
+  stoppedAt: string;
+  energyWh: number;
+  cost: number;
+  currency: string | null;
+  stopCause: string;
+}
+
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  pageCount: number;
+  totalCount: number;
+}
+
+/** Live per-connector runtime state — backs the Lock screen and the Cost screen's session trigger. */
+export interface ConnectorRuntimeView {
+  connectorId: number;
+  label: string | null;
+  status: string;
+  locked: boolean;
+  activeSession: {
+    idTag: string;
+    transactionId: number | null;
+    startedAt: string;
+    chargeRateKw: number;
+    currentEnergyWh: number;
+  } | null;
+}
+
+/** Result of stopping a simulated session — shown in the post-charge summary popup. */
+export interface PostChargeSummary {
+  connectorId: number;
+  connectorLabel: string | null;
+  idTag: string;
+  transactionId: number | null;
+  startedAt: string;
+  stoppedAt: string;
+  energyKwh: number;
+  cost: number;
+  currency: string | null;
+  stopCause: string;
+  isFault: boolean;
+  durationSeconds: number;
+}
