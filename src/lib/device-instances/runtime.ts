@@ -1,5 +1,6 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
+import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { OcppChargePointSession, OcppClient, type OcppConnectorStatusInfo } from "@/lib/ocpp";
 import { orderModelConnectors } from "./connectors";
 import { prisma } from "@/lib/prisma";
@@ -64,6 +65,7 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
   client.on("disconnected", () => {
     if (entry.manuallyStopped) return;
     void writeStatus(instance.id, { status: DeviceConnectionStatus.DISCONNECTED });
+    void logDeviceInstanceEvent(instance.id, "DISCONNECTED", "Dev off-line");
   });
   client.on("error", (err) => {
     if (entry.manuallyStopped) return;
@@ -75,6 +77,8 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
       statusReason: null,
       lastConnectedAt: new Date(),
     });
+    void logDeviceInstanceEvent(instance.id, "CONNECTED", "Connected to CSMS");
+    void logDeviceInstanceEvent(instance.id, "BOOT", "BootNotification accepted");
   });
   session.on("bootPending", ({ retryInMs }) => {
     if (entry.manuallyStopped) return;
@@ -86,6 +90,7 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
       status: DeviceConnectionStatus.FAULTED,
       statusReason: `CSMS rejected boot notification, retrying in ${Math.round(retryInMs / 1000)}s`,
     });
+    void logDeviceInstanceEvent(instance.id, "FAULT", `BootNotification rejected, retrying in ${Math.round(retryInMs / 1000)}s`);
   });
 
   registry.set(instance.id, entry);
@@ -128,10 +133,12 @@ export async function stopDeviceInstance(instanceId: string): Promise<DeviceInst
     entry.client.disconnect();
   }
 
-  return prisma.deviceInstance.update({
+  const instance = await prisma.deviceInstance.update({
     where: { id: instanceId },
     data: { status: DeviceConnectionStatus.DISCONNECTED, statusReason: null },
   });
+  void logDeviceInstanceEvent(instanceId, "DISCONNECTED", "Dev off-line");
+  return instance;
 }
 
 /** Tears down any in-memory runtime state for an instance. Call before/when deleting it. */

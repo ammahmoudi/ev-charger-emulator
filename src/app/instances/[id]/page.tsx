@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { InstanceSubNav } from "@/components/device-instances/InstanceSubNav";
 import { StatusBadge } from "@/components/device-instances/StatusBadge";
 import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
 
@@ -130,6 +131,8 @@ export default function InstanceDetailPage() {
           {instance.statusReason ? <p className="text-xs text-red-600 dark:text-red-400">{instance.statusReason}</p> : null}
         </div>
       </div>
+
+      <InstanceSubNav instanceId={instanceId} />
 
       <div className="flex gap-3">
         <button

@@ -170,7 +170,10 @@ model DeviceInstance {
   statusReason    String?
   lastConnectedAt DateTime?
 
-  parameters DeviceInstanceParameter[]
+  parameters       DeviceInstanceParameter[]
+  events           DeviceInstanceEvent[]
+  sessions         DeviceInstanceSession[]
+  connectorStates  DeviceInstanceConnectorState[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -199,4 +202,107 @@ model DeviceInstanceParameter {
 
   @@unique([deviceInstanceId, deviceModelParameterId])
   @@index([deviceInstanceId])
+}
+
+/// Category of a DeviceInstanceEvent, driving how it's summarized in the Event log (issue #14).
+/// Mirrors the lifecycle moments the real device's Event screen surfaces (boot/off-line,
+/// status transitions, transactions, faults) plus locally-triggered command handling.
+enum DeviceInstanceEventType {
+  CONNECTED
+  DISCONNECTED
+  BOOT
+  STATUS_CHANGE
+  TRANSACTION_STARTED
+  TRANSACTION_STOPPED
+  FAULT
+  REMOTE_COMMAND
+}
+
+/// One row in a device instance's Event log (bottom-nav "Event" screen on the real device):
+/// S.N (row position, derived from occurredAt ordering) + occurrence time + free-text
+/// description, e.g. "Dev off-line", "Event Clear", "KM opt Err".
+model DeviceInstanceEvent {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  type        DeviceInstanceEventType
+  description String
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([deviceInstanceId, occurredAt])
+}
+
+/// A completed simulated charging session (issue #9), persisted for the Cost/session-history
+/// screen and the post-charge summary popup. `stopCause` is free text rather than a strict
+/// enum — the real device surfaces its own internal fault codes here ("QF Err", "KM Err") next
+/// to normal OCPP-ish stop reasons ("Manu. Stop"), so a closed enum would fight that.
+model DeviceInstanceSession {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  /// OCPP connectorId the session ran on ("Gun ID" on the real device).
+  connectorId    Int
+  /// Denormalized connector label at the time of the session (e.g. "Plug A"), for display
+  /// even if the device model's connector topology changes later.
+  connectorLabel String?
+
+  /// idTag used to authorize the session ("User Card NO." on the real device).
+  idTag         String
+  transactionId Int?
+
+  startedAt DateTime
+  stoppedAt DateTime
+
+  /// Total energy delivered, in Wh (displayed as kWh).
+  energyWh Float
+  /// Total cost for the session, in `currency`.
+  cost     Float
+  currency String?
+
+  /// Free-text stop cause/reason, e.g. "Manu. Stop", "EV Disconnected", "UnlockConnector",
+  /// or a device fault code such as "QF Err" / "KM Err" / "Ins Err".
+  stopCause String
+
+  createdAt DateTime @default(now())
+
+  @@index([deviceInstanceId, startedAt])
+}
+
+/// Live per-connector runtime state for a device instance: current status, manual lock state
+/// (issue #14's Lock screen), and the in-progress simulated session (if any). Persisted (rather
+/// than kept purely in-memory like `OcppChargePointSession`'s connector map) so the Lock/Cost
+/// screens survive a server restart; the active session's energy is derived on read from
+/// `activeChargeRateKw` and elapsed wall-clock time rather than a running timer.
+model DeviceInstanceConnectorState {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  connectorId Int
+
+  /// Mirrors `OcppChargePointStatus` loosely; kept as a string so this table doesn't need a
+  /// migration every time the OCPP status enum grows.
+  status String @default("Available")
+  /// Manual per-connector lock, toggled from the Lock screen; mirrors `UnlockConnector` but
+  /// locally triggerable (issue #14), independent of the CSMS-initiated path from issue #10.
+  locked Boolean @default(false)
+
+  activeIdTag        String?
+  activeTransactionId Int?
+  activeStartedAt     DateTime?
+  activeChargeRateKw  Float?
+
+  /// Monotonic per-connector counter used to mint `activeTransactionId` values locally.
+  transactionCounter Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, connectorId])
 }
