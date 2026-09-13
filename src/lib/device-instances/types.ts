@@ -16,6 +16,7 @@ export interface DeviceInstanceConnectorView {
   label: string;
   connectorType: ConnectorType;
   powerType: PowerType;
+  maxPowerKw: number | null;
   status: OcppChargePointStatus | null;
   errorCode: OcppChargePointErrorCode | null;
 }

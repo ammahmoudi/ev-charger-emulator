@@ -15,6 +15,7 @@ function buildConnectorSummaries(instanceId: string, modelConnectors: DeviceMode
       label: connector.displayLabel,
       connectorType: connector.connectorType,
       powerType: connector.powerType,
+      maxPowerKw: connector.maxPowerKw,
       status: live?.status ?? null,
       errorCode: live?.errorCode ?? null,
     };

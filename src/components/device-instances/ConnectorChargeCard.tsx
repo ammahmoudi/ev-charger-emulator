@@ -1,0 +1,157 @@
+"use client";
+
+import type { ConnectorType } from "@prisma/client";
+
+const WH_PER_KWH = 1000;
+const MS_PER_HOUR = 3_600_000;
+
+export interface ChargeCardConnector {
+  connectorId: number;
+  label: string;
+  connectorType: ConnectorType;
+  maxPowerKw: number | null;
+}
+
+export interface ChargeCardRuntime {
+  status: string;
+  locked: boolean;
+  activeSession: {
+    idTag: string;
+    startedAt: string;
+    chargeRateKw: number;
+    currentEnergyWh: number;
+  } | null;
+}
+
+function badgeLetter(label: string, connectorId: number): string {
+  const trimmed = label.trim();
+  return trimmed ? trimmed[trimmed.length - 1].toUpperCase() : String(connectorId);
+}
+
+function liveEnergyWh(startedAt: string, chargeRateKw: number, now: Date): number {
+  const elapsedMs = Math.max(0, now.getTime() - new Date(startedAt).getTime());
+  return (chargeRateKw * WH_PER_KWH * elapsedMs) / MS_PER_HOUR;
+}
+
+function formatElapsed(startedAt: string, now: Date): string {
+  const totalSeconds = Math.max(0, Math.floor((now.getTime() - new Date(startedAt).getTime()) / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+/** Generic connector glyph — deliberately not connector-type-specific, matching all `ConnectorType` values. */
+function ConnectorGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth={2} className={className}>
+      <circle cx="32" cy="26" r="18" />
+      <circle cx="24" cy="20" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="32" cy="16" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="40" cy="20" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="22" cy="30" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="42" cy="30" r="2.5" fill="currentColor" stroke="none" />
+      <path d="M20 32q12 10 24 0" strokeLinecap="round" />
+      <rect x="22" y="46" width="8" height="10" rx="2" />
+      <rect x="34" y="46" width="8" height="10" rx="2" />
+    </svg>
+  );
+}
+
+/**
+ * Per-connector charging status card — the Home screen's core UI element (issue #2), mirroring
+ * the real device's Plug A/B cards: connector type, idle prompt or live charging readout, and a
+ * Charging/Stop button. Backed by `connector-sessions.ts`'s DB-persisted session state (the
+ * module actually wired into the live instance runtime — see runtime.ts and the local-simulation
+ * dead-code note in this PR's description) rather than issue #9's `SimulatedChargingSession`.
+ */
+export function ConnectorChargeCard({
+  connector,
+  runtime,
+  now,
+  pending,
+  error,
+  onStartCharging,
+  onStopCharging,
+  onClearFault,
+}: {
+  connector: ChargeCardConnector;
+  runtime: ChargeCardRuntime | null;
+  now: Date;
+  pending: boolean;
+  error: string | null;
+  onStartCharging: () => void;
+  onStopCharging: () => void;
+  onClearFault: () => void;
+}) {
+  const status = runtime?.status ?? "Available";
+  const session = runtime?.activeSession ?? null;
+  const isCharging = status === "Charging" && session !== null;
+  const isFaulted = status === "Faulted";
+
+  return (
+    <div className="flex flex-1 flex-col gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-zinc-900">
+      <div className="flex items-start justify-between">
+        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-200 text-xs font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+          {badgeLetter(connector.label, connector.connectorId)}
+        </span>
+        <span className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{connector.connectorType}</span>
+      </div>
+
+      <ConnectorGlyph
+        className={`mx-auto h-16 w-16 ${isCharging ? "text-emerald-500" : isFaulted ? "text-red-400" : "text-zinc-300 dark:text-zinc-700"}`}
+      />
+
+      {isCharging && session ? (
+        <div className="flex flex-col items-center gap-1 text-center text-sm">
+          <p className="font-medium text-emerald-600 dark:text-emerald-400">Charging — card {session.idTag}</p>
+          <p className="font-mono text-xs text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
+          <p className="text-zinc-700 dark:text-zinc-300">
+            {(liveEnergyWh(session.startedAt, session.chargeRateKw, now) / WH_PER_KWH).toFixed(3)} kWh
+            <span className="text-zinc-400"> · {session.chargeRateKw} kW</span>
+          </p>
+        </div>
+      ) : isFaulted ? (
+        <p className="text-center text-sm text-red-600 dark:text-red-400">
+          Connector fault — clear it below or from the Lock screen.
+        </p>
+      ) : (
+        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+          Please connect the EV or click charging button.
+        </p>
+      )}
+
+      {error ? <p className="text-center text-xs text-red-600 dark:text-red-400">{error}</p> : null}
+
+      {isFaulted ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onClearFault}
+          className="w-full rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+        >
+          Clear fault
+        </button>
+      ) : isCharging ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onStopCharging}
+          className="w-full rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-900 disabled:opacity-50 dark:bg-zinc-200 dark:text-black dark:hover:bg-white"
+        >
+          Stop
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={pending || status !== "Available"}
+          onClick={onStartCharging}
+          className="w-full rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+        >
+          Charging
+        </button>
+      )}
+    </div>
+  );
+}

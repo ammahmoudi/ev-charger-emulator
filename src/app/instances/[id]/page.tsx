@@ -1,31 +1,44 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { InstanceSubNav } from "@/components/device-instances/InstanceSubNav";
-import { StatusBadge } from "@/components/device-instances/StatusBadge";
-import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
+import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
+import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { HomeHeaderBar } from "@/components/device-instances/HomeHeaderBar";
+import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
+import { NORMAL_STOP_CAUSES } from "@/lib/device-instances/stop-causes";
+import type { ConnectorRuntimeView, DeviceInstanceDetail, PostChargeSummary } from "@/lib/device-instances/types";
 
-export default function InstanceDetailPage() {
+const CONNECTOR_POLL_INTERVAL_MS = 2000;
+const CLOCK_TICK_MS = 1000;
+const DEFAULT_CHARGE_RATE_KW = 7;
+const MANUAL_STOP_CAUSE = NORMAL_STOP_CAUSES[0];
+
+/**
+ * The device instance's Home screen (issue #2) — the actual default page for an instance,
+ * matching the real PEVC3107E's home screen (see docs/device-reference/PEVC3107E/README.md and
+ * its screenshots/01-home-dual-plug.png): a charging card per connector, a header with serial
+ * number + live clock, and the configured Charge Price. Sub-screens (Settings/Status/Maintenance/
+ * Event/Cost/Lock/Device-test) are reached from the header/bottom-nav chrome, matching the real
+ * device's navigation, rather than the previous plain edit-instance form this route used to be.
+ */
+export default function InstanceHomePage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const instanceId = params.id;
 
   const [instance, setInstance] = useState<DeviceInstanceDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [connectors, setConnectors] = useState<ConnectorRuntimeView[] | null>(null);
+  const [now, setNow] = useState(() => new Date());
+  const [connectionPending, setConnectionPending] = useState(false);
+  const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
+  const [connectorErrors, setConnectorErrors] = useState<Record<number, string>>({});
+  const [summary, setSummary] = useState<PostChargeSummary | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [name, setName] = useState("");
-  const [chargePointId, setChargePointId] = useState("");
-  const [csmsUrl, setCsmsUrl] = useState("");
-
-  const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [actionPending, setActionPending] = useState(false);
-
-  async function load() {
+  const loadInstance = useCallback(async () => {
     const res = await fetch(`/api/device-instances/${instanceId}`);
     if (res.status === 404) {
       setNotFound(true);
@@ -33,72 +46,111 @@ export default function InstanceDetailPage() {
     }
     const data = await res.json();
     setInstance(data.instance);
-    setName(data.instance.name);
-    setChargePointId(data.instance.chargePointId);
-    setCsmsUrl(data.instance.csmsUrl);
-  }
+  }, [instanceId]);
+
+  const loadConnectors = useCallback(async () => {
+    const res = await fetch(`/api/device-instances/${instanceId}/connectors`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setConnectors(data.connectors);
+  }, [instanceId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on route param change, not derived state
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId]);
+    loadInstance();
+  }, [loadInstance]);
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setFieldErrors({});
-    setSaving(true);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch + poll, not derived state
+    loadConnectors();
+    pollRef.current = setInterval(loadConnectors, CONNECTOR_POLL_INTERVAL_MS);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loadConnectors]);
+
+  useEffect(() => {
+    const clockRef = setInterval(() => setNow(new Date()), CLOCK_TICK_MS);
+    return () => clearInterval(clockRef);
+  }, []);
+
+  async function handleToggleConnection() {
+    if (!instance) return;
+    const isRunning = instance.status === "CONNECTED" || instance.status === "CONNECTING";
+    setConnectionPending(true);
     try {
-      const res = await fetch(`/api/device-instances/${instanceId}`, {
-        method: "PATCH",
+      const res = await fetch(`/api/device-instances/${instanceId}/${isRunning ? "stop" : "start"}`, { method: "POST" });
+      if (res.ok) setInstance((await res.json()).instance);
+    } finally {
+      setConnectionPending(false);
+    }
+  }
+
+  async function handleStartCharging(connectorId: number, maxPowerKw: number | null) {
+    setPendingConnectorId(connectorId);
+    setConnectorErrors((prev) => ({ ...prev, [connectorId]: "" }));
+    try {
+      const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/session/start`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, chargePointId, csmsUrl }),
+        body: JSON.stringify({
+          idTag: `EMULATOR-${Date.now().toString(36).toUpperCase()}`,
+          chargeRateKw: maxPowerKw ?? DEFAULT_CHARGE_RATE_KW,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
-        if (data.field) setFieldErrors({ [data.field]: data.error });
-        else setError(data.error ?? "Failed to save changes");
+        setConnectorErrors((prev) => ({ ...prev, [connectorId]: data.error ?? "Failed to start charging" }));
         return;
       }
-      setInstance(data.instance);
-    } catch {
-      setError("Failed to save changes");
+      await loadConnectors();
     } finally {
-      setSaving(false);
+      setPendingConnectorId(null);
     }
   }
 
-  async function handleStartStop() {
-    if (!instance) return;
-    const isRunning = instance.status === "CONNECTED" || instance.status === "CONNECTING";
-    setActionPending(true);
+  async function handleStopCharging(connectorId: number) {
+    setPendingConnectorId(connectorId);
+    setConnectorErrors((prev) => ({ ...prev, [connectorId]: "" }));
     try {
-      const res = await fetch(`/api/device-instances/${instanceId}/${isRunning ? "stop" : "start"}`, {
+      const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/session/stop`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stopCause: MANUAL_STOP_CAUSE }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setInstance(data.instance);
+      const data = await res.json();
+      if (!res.ok) {
+        setConnectorErrors((prev) => ({ ...prev, [connectorId]: data.error ?? "Failed to stop charging" }));
+        return;
       }
+      setSummary(data.summary);
+      await loadConnectors();
     } finally {
-      setActionPending(false);
+      setPendingConnectorId(null);
     }
   }
 
-  async function handleDelete() {
-    if (!instance) return;
-    if (!confirm(`Delete device instance "${instance.name}"? This cannot be undone.`)) return;
-    const res = await fetch(`/api/device-instances/${instanceId}`, { method: "DELETE" });
-    if (res.ok || res.status === 204) router.push("/instances");
+  async function handleClearFault(connectorId: number) {
+    setPendingConnectorId(connectorId);
+    try {
+      const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/clear-fault`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setConnectorErrors((prev) => ({ ...prev, [connectorId]: data.error ?? "Failed to clear fault" }));
+        return;
+      }
+      await loadConnectors();
+    } finally {
+      setPendingConnectorId(null);
+    }
   }
 
   if (notFound) {
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
         <p className="text-sm text-zinc-500">Device instance not found.</p>
-        <Link href="/instances" className="text-sm underline">
-          Back to instances
+        <Link href="/" className="text-sm underline">
+          Back to dashboard
         </Link>
       </div>
     );
@@ -112,117 +164,63 @@ export default function InstanceDetailPage() {
     );
   }
 
-  const isRunning = instance.status === "CONNECTED" || instance.status === "CONNECTING";
+  const priceParam = instance.parameters.find((p) => p.key === "pricePerKwh");
+  const currencyParam = instance.parameters.find((p) => p.key === "currencyUnit");
+  const price = Number(priceParam?.value ?? 0) || 0;
+  const currency = currencyParam?.value ?? "—";
+
+  const connectorByIdConnectorId = new Map((connectors ?? []).map((c) => [c.connectorId, c]));
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex items-center justify-between">
-        <div className="flex flex-col gap-1">
-          <Link href="/instances" className="text-xs text-zinc-500 hover:underline">
-            ← Instances
-          </Link>
-          <h1 className="text-xl font-semibold text-black dark:text-zinc-50">{instance.name}</h1>
-          <p className="text-sm text-zinc-500">
-            {instance.deviceModel.manufacturer} {instance.deviceModel.model}
+    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
+      <Link href="/" className="text-xs text-zinc-500 hover:underline">
+        ← All devices
+      </Link>
+
+      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+        <HomeHeaderBar
+          instanceId={instanceId}
+          name={instance.name}
+          serialNumber={instance.chargePointId}
+          now={now}
+          status={instance.status}
+          statusReason={instance.statusReason}
+          connectionPending={connectionPending}
+          onToggleConnection={handleToggleConnection}
+        />
+
+        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+          {connectors === null ? (
+            <p className="text-center text-sm text-zinc-500">Loading…</p>
+          ) : instance.connectors.length === 0 ? (
+            <p className="text-center text-sm text-zinc-500">This device model has no connectors configured.</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {instance.connectors.map((connector) => (
+                <ConnectorChargeCard
+                  key={connector.connectorId}
+                  connector={connector}
+                  runtime={connectorByIdConnectorId.get(connector.connectorId) ?? null}
+                  now={now}
+                  pending={pendingConnectorId === connector.connectorId}
+                  error={connectorErrors[connector.connectorId] || null}
+                  onStartCharging={() => handleStartCharging(connector.connectorId, connector.maxPowerKw)}
+                  onStopCharging={() => handleStopCharging(connector.connectorId)}
+                  onClearFault={() => handleClearFault(connector.connectorId)}
+                />
+              ))}
+            </div>
+          )}
+
+          <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Charge Prices: <span className="font-mono">{price.toFixed(4)}</span> {currency}/kWh
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <StatusBadge status={instance.status} />
-          {instance.statusReason ? <p className="text-xs text-red-600 dark:text-red-400">{instance.statusReason}</p> : null}
-        </div>
+
+        <DeviceBottomNav instanceId={instanceId} />
       </div>
 
-      <InstanceSubNav instanceId={instanceId} />
-
-      <div className="flex gap-3">
-        <button
-          type="button"
-          disabled={actionPending}
-          onClick={handleStartStop}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          {isRunning ? "Stop" : "Start"}
-        </button>
-        <Link
-          href={`/instances/${instanceId}/settings`}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Settings
-        </Link>
-        <Link
-          href={`/instances/${instanceId}/status`}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          Status / diagnostics
-        </Link>
-        <Link
-          href={`/instances/${instanceId}/device-test`}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          Device (hardware test)
-        </Link>
-        <Link
-          href={`/instances/${instanceId}/maintenance`}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          Maintenance
-        </Link>
-        <button
-          type="button"
-          onClick={handleDelete}
-          className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-        >
-          Delete
-        </button>
-      </div>
-
-      <form onSubmit={handleSave} className="flex flex-col gap-5">
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Name</label>
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Charge point ID</label>
-          <input
-            required
-            value={chargePointId}
-            onChange={(e) => setChargePointId(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-          />
-          {fieldErrors.chargePointId ? (
-            <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.chargePointId}</p>
-          ) : null}
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">CSMS OCPP WebSocket URL</label>
-          <input
-            required
-            value={csmsUrl}
-            onChange={(e) => setCsmsUrl(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
-          />
-          {fieldErrors.csmsUrl ? <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.csmsUrl}</p> : null}
-        </div>
-
-        {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
-        <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-          >
-            {saving ? "Saving…" : "Save changes"}
-          </button>
-        </div>
-      </form>
+      {summary ? <PostChargeSummaryModal summary={summary} onClose={() => setSummary(null)} /> : null}
     </div>
   );
 }
