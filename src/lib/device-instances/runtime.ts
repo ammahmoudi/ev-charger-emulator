@@ -141,6 +141,16 @@ export async function stopDeviceInstance(instanceId: string): Promise<DeviceInst
   return instance;
 }
 
+/**
+ * Forces a fresh OCPP connection: stops then starts the instance, mirroring what the
+ * Maintenance tab's "Restore Factory Setting" → OCPP button does on the real device
+ * (closing and re-establishing the CSMS connection, distinct from a parameter reset).
+ */
+export async function reconnectDeviceInstance(instanceId: string): Promise<DeviceInstance> {
+  await stopDeviceInstance(instanceId);
+  return startDeviceInstance(instanceId);
+}
+
 /** Tears down any in-memory runtime state for an instance. Call before/when deleting it. */
 export function disposeDeviceInstance(instanceId: string): void {
   const entry = registry.get(instanceId);
