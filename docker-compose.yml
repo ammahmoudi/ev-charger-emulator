@@ -10,6 +10,45 @@ services:
       - "5442:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ev_charger_emulator -d ev_charger_emulator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- Optional "run the app in Docker too" path (issue #7), behind the `full` profile so
+  # plain `docker compose up` keeps only starting Postgres — the primary, documented dev flow
+  # (`npm run dev` locally against this Postgres) is unaffected. Opt in with:
+  #   docker compose --profile full up --build
+  # Per-instance CSMS WS URLs are set at runtime from the UI (Networks tab / instance
+  # creation), not via env vars — see README.
+
+  migrate:
+    profiles: ["full"]
+    build:
+      context: .
+      target: migrator
+    environment:
+      DATABASE_URL: postgresql://ev_charger_emulator:ev_charger_emulator@postgres:5432/ev_charger_emulator
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    profiles: ["full"]
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://ev_charger_emulator:ev_charger_emulator@postgres:5432/ev_charger_emulator
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:
