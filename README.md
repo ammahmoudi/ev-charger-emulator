@@ -17,9 +17,11 @@ Early scaffold. See the repo's Issues for the build plan.
 ## First supported device model
 
 **PEVC3107E** (manufacturer: PEVC/SINO) — a dual-gun (Plug A / Plug B) DC fast charger, CCS2
-connectors, OCPP 1.6J. Reference screenshots of the real device's screens live outside this repo
-(internal docs); UI copy/layout in this emulator is derived from those but no vendor manuals are
-committed here.
+connectors, OCPP 1.6J. Reference screenshots of the real device's screens are in
+[`docs/device-reference/PEVC3107E`](docs/device-reference/PEVC3107E); the vendor's maintenance
+manual (PDF/DOCX) is not committed here. Real session/OCPP-log data pulled from a live deployment
+for reference is documented in [`docs/data-fixtures.md`](docs/data-fixtures.md) but kept out of
+git entirely (not just out of this repo).
 
 Planned device/connector shape (also mirrored in the CSMS's own device-model catalog):
 
