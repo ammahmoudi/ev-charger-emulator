@@ -1,8 +1,7 @@
 // Domain models: device models (reusable charger-family templates), their connector
-// topology, and their typed configuration-parameter schema. Added in issue #5.
-//
-// Device *instances* (a device model configured and connected to a CSMS) are out of
-// scope here — see issue #3.
+// topology, and their typed configuration-parameter schema (added in issue #5), plus
+// device *instances* — a model picked, given an identity + CSMS URL, and its own copy
+// of the model's parameter values (added in issue #3).
 
 generator client {
   provider = "prisma-client-js"
@@ -57,6 +56,14 @@ enum ParameterValueType {
   ENUM
 }
 
+/// Live OCPP connection status of a device instance, driven by its OcppClient lifecycle.
+enum DeviceConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  FAULTED
+}
+
 /// A reusable charger-family template (e.g. "PEVC3107E") that device instances are
 /// created from. Holds identity, connector topology, and the typed parameter schema
 /// describing every configurable field shown across the device's settings tabs.
@@ -70,6 +77,7 @@ model DeviceModel {
 
   connectors  DeviceModelConnector[]
   parameters  DeviceModelParameter[]
+  instances   DeviceInstance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -131,9 +139,64 @@ model DeviceModelParameter {
   description String?
   sortOrder   Int    @default(0)
 
+  instanceValues DeviceInstanceParameter[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([deviceModelId, key])
   @@index([deviceModelId])
+}
+
+/// An emulated device created from a DeviceModel: a chosen model plus its own identity
+/// (charge point id), CSMS OCPP WebSocket URL, live connection status, and its own copy
+/// of the model's parameter values (seeded from the model's defaults, then editable).
+model DeviceInstance {
+  id            String @id @default(cuid())
+  deviceModelId String
+  deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
+
+  /// Human label for this instance, e.g. "Bay 3 charger".
+  name String
+
+  /// OCPP charge point identity (also the last path segment of the CSMS URL for most CSMS's).
+  chargePointId String @unique
+
+  /// CSMS OCPP WebSocket URL to connect to, e.g. ws://localhost:9000/CP1.
+  csmsUrl String
+
+  status DeviceConnectionStatus @default(DISCONNECTED)
+  /// Human-readable detail for the current status, e.g. an error message when FAULTED.
+  statusReason    String?
+  lastConnectedAt DateTime?
+
+  parameters DeviceInstanceParameter[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deviceModelId])
+}
+
+/// One parameter value belonging to a device instance — a per-instance, editable copy of
+/// a DeviceModelParameter, seeded from that parameter's defaultValue at creation time.
+model DeviceInstanceParameter {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  deviceModelParameterId String
+  deviceModelParameter   DeviceModelParameter @relation(fields: [deviceModelParameterId], references: [id], onDelete: Cascade)
+
+  /// Denormalized copy of the model parameter's key, for convenient lookups without a join.
+  key   String
+  /// Current value, stored as text and interpreted per the model parameter's valueType.
+  value String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, deviceModelParameterId])
+  @@index([deviceInstanceId])
 }
