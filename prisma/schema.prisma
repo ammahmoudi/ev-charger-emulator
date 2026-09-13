@@ -216,6 +216,9 @@ enum DeviceInstanceEventType {
   TRANSACTION_STOPPED
   FAULT
   REMOTE_COMMAND
+  /// A bottom-nav Maintenance tab admin action (issue #15): event/consumption record clear,
+  /// factory parameter restore, or a board firmware upgrade.
+  MAINTENANCE
 }
 
 /// One row in a device instance's Event log (bottom-nav "Event" screen on the real device):

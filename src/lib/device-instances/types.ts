@@ -151,6 +151,15 @@ export interface ConnectorRuntimeView {
   } | null;
 }
 
+/** Maintenance-tab state (issue #15): firmware version plus live per-connector runtime state. */
+export interface DeviceInstanceMaintenanceState {
+  /** Value of the instance's "firmwareVersion" parameter, or null if its model defines none. */
+  firmwareVersion: string | null;
+  connectors: ConnectorRuntimeView[];
+  eventCount: number;
+  chargingSessionCount: number;
+}
+
 /** Result of stopping a simulated session — shown in the post-charge summary popup. */
 export interface PostChargeSummary {
   connectorId: number;
