@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { Pagination } from "@/components/device-instances/Pagination";
 import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
@@ -137,15 +138,15 @@ export default function CostPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instanceName ?? "Instance"}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Cost / session history"} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Cost / session history</h1>
 
           {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
@@ -291,7 +292,7 @@ export default function CostPage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Cost" />
-      </div>
+      </DeviceScreenFrame>
 
       {summary ? <PostChargeSummaryModal summary={summary} onClose={() => setSummary(null)} /> : null}
     </div>

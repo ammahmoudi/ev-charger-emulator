@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { HomeHeaderBar } from "@/components/device-instances/HomeHeaderBar";
 import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
 import { NORMAL_STOP_CAUSES } from "@/lib/device-instances/stop-causes";
@@ -172,12 +173,12 @@ export default function InstanceHomePage() {
   const connectorByIdConnectorId = new Map((connectors ?? []).map((c) => [c.connectorId, c]));
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href="/" className="text-xs text-zinc-500 hover:underline">
         ← All devices
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <HomeHeaderBar
           instanceId={instanceId}
           name={instance.name}
@@ -189,7 +190,7 @@ export default function InstanceHomePage() {
           onToggleConnection={handleToggleConnection}
         />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           {connectors === null ? (
             <p className="text-center text-sm text-zinc-500">Loading…</p>
           ) : instance.connectors.length === 0 ? (
@@ -218,7 +219,7 @@ export default function InstanceHomePage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} />
-      </div>
+      </DeviceScreenFrame>
 
       {summary ? <PostChargeSummaryModal summary={summary} onClose={() => setSummary(null)} /> : null}
     </div>

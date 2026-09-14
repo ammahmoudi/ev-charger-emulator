@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { Pagination } from "@/components/device-instances/Pagination";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import type { DeviceInstanceEventView, PagedResult } from "@/lib/device-instances/types";
@@ -55,15 +56,15 @@ export default function EventsPage() {
   }, [load]);
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instanceName ?? "Instance"}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Event log"} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Event log</h1>
 
           {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
@@ -110,7 +111,7 @@ export default function EventsPage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Event" />
-      </div>
+      </DeviceScreenFrame>
     </div>
   );
 }

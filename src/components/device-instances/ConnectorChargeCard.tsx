@@ -86,6 +86,7 @@ export function ConnectorChargeCard({
 }) {
   const status = runtime?.status ?? "Available";
   const session = runtime?.activeSession ?? null;
+  const isPreparing = status === "Preparing" && session !== null;
   const isCharging = status === "Charging" && session !== null;
   const isFaulted = status === "Faulted";
 
@@ -99,10 +100,23 @@ export function ConnectorChargeCard({
       </div>
 
       <ConnectorGlyph
-        className={`mx-auto h-16 w-16 ${isCharging ? "text-emerald-500" : isFaulted ? "text-red-400" : "text-zinc-300 dark:text-zinc-700"}`}
+        className={`mx-auto h-16 w-16 ${
+          isCharging
+            ? "text-emerald-500"
+            : isPreparing
+              ? "text-amber-500 animate-pulse"
+              : isFaulted
+                ? "text-red-400"
+                : "text-zinc-300 dark:text-zinc-700"
+        }`}
       />
 
-      {isCharging && session ? (
+      {isPreparing && session ? (
+        <div className="flex flex-col items-center gap-1 text-center text-sm">
+          <p className="font-medium text-amber-600 dark:text-amber-400">Preparing — authorizing card {session.idTag}…</p>
+          <p className="font-mono text-xs text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
+        </div>
+      ) : isCharging && session ? (
         <div className="flex flex-col items-center gap-1 text-center text-sm">
           <p className="font-medium text-emerald-600 dark:text-emerald-400">Charging — card {session.idTag}</p>
           <p className="font-mono text-xs text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
@@ -131,6 +145,15 @@ export function ConnectorChargeCard({
           className="w-full rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
         >
           Clear fault
+        </button>
+      ) : isPreparing ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onStopCharging}
+          className="w-full rounded-md border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-900 dark:text-amber-400 dark:hover:bg-amber-950"
+        >
+          Cancel
         </button>
       ) : isCharging ? (
         <button

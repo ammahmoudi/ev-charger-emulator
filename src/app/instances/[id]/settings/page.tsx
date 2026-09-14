@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { renderParameterControl } from "@/components/device-instances/ParameterField";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { compactControlClassName, SettingsFieldRow } from "@/components/device-instances/settings/SettingsFieldRow";
 import { SettingsPager } from "@/components/device-instances/settings/SettingsPager";
@@ -131,16 +132,16 @@ export default function InstanceSettingsPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instance.name}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instance.name} />
         <SettingsTabs active={activeTab} onSelect={selectTab} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="rounded-xl bg-white p-4 shadow-sm dark:bg-zinc-900">
             {activeTab === "DEVICE" ? (
               <DeviceTabContent
@@ -180,7 +181,7 @@ export default function InstanceSettingsPage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Setting" />
-      </div>
+      </DeviceScreenFrame>
     </div>
   );
 }
