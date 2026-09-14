@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ConnectorAvailabilityBadge } from "@/components/device-instances/ConnectorAvailabilityBadge";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { MaintenanceConfirmPanel } from "@/components/device-instances/MaintenanceConfirmPanel";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import type { DeviceInstanceMaintenanceState } from "@/lib/device-instances/types";
@@ -114,15 +115,15 @@ export default function MaintenancePage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instance.name}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instance.name} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Maintenance</h1>
             <p className="text-sm text-zinc-500">
@@ -272,7 +273,7 @@ export default function MaintenancePage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Maintenance" />
-      </div>
+      </DeviceScreenFrame>
     </div>
   );
 }

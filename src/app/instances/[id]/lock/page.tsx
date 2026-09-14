@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import type { ConnectorRuntimeView } from "@/lib/device-instances/types";
 
@@ -12,7 +13,8 @@ const POLL_INTERVAL_MS = 2000;
 
 const STATUS_STYLES: Record<string, string> = {
   Available: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
-  Charging: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  Preparing: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  Charging: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
   Faulted: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
 };
 
@@ -97,15 +99,15 @@ export default function LockPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instanceName ?? "Instance"}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Lock"} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Lock</h1>
             <p className="text-sm text-zinc-500">
@@ -193,7 +195,7 @@ export default function LockPage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Lock" />
-      </div>
+      </DeviceScreenFrame>
     </div>
   );
 }

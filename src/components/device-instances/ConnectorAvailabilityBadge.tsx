@@ -1,12 +1,13 @@
 /**
  * Connector status is a free-text string (`DeviceInstanceConnectorState.status`, issue #14),
- * not a closed enum — mirrors the known values used across the app (Available/Charging/Faulted
- * from connector-sessions.ts, Unavailable from the Maintenance tab's firmware-upgrade action)
- * and falls back to a neutral style for anything else.
+ * not a closed enum — mirrors the known values used across the app (Available/Preparing/
+ * Charging/Faulted from connector-sessions.ts, Unavailable from the Maintenance tab's
+ * firmware-upgrade action) and falls back to a neutral style for anything else.
  */
 const STYLES: Record<string, string> = {
   Available: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
-  Charging: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  Preparing: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  Charging: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
   Faulted: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
   Unavailable: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 animate-pulse",
 };

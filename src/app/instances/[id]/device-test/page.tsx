@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { ActionButtonGroup, Readout } from "@/components/device-test/Readout";
 import type {
@@ -134,15 +135,15 @@ export default function DeviceTestPage() {
   ];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
       <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
         ← {instanceName ?? "Instance"}
       </Link>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-lg dark:border-zinc-800">
+      <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Device (hardware test)"} />
 
-        <div className="flex flex-col gap-4 bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Device (hardware test)</h1>
             <p className="text-sm text-zinc-500">Manual hardware diagnostics.</p>
@@ -181,7 +182,7 @@ export default function DeviceTestPage() {
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Device" />
-      </div>
+      </DeviceScreenFrame>
     </div>
   );
 }
