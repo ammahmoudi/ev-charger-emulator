@@ -584,20 +584,21 @@ const pevc3107eParameters: ParameterSeed[] = [
     defaultValue: "0",
     sortOrder: 105,
   },
-  // --- Other tab, page 3 (QR codes) --- two CSMS-configurable URLs (readable/writable via
-  // GetConfiguration/ChangeConfiguration like any other key) that the QR overlay screen
+  // --- Other tab, page 3 (QR codes) --- two real OCPP 1.6 config keys, confirmed against a real
+  // CSMS's GetConfiguration response (QRcodeConnectID1/2), readable/writable via
+  // GetConfiguration/ChangeConfiguration like any other key, that the QR overlay screen
   // (`/instances/[id]/qr`) renders as scannable QR codes when set.
   {
-    key: "qrCodeUrl1",
-    label: "QR code URL 1",
+    key: "QRcodeConnectID1",
+    label: "QR code URL 1 (QRcodeConnectID1)",
     category: ParameterCategory.OTHER,
     valueType: ParameterValueType.STRING,
     defaultValue: "",
     sortOrder: 106,
   },
   {
-    key: "qrCodeUrl2",
-    label: "QR code URL 2",
+    key: "QRcodeConnectID2",
+    label: "QR code URL 2 (QRcodeConnectID2)",
     category: ParameterCategory.OTHER,
     valueType: ParameterValueType.STRING,
     defaultValue: "",

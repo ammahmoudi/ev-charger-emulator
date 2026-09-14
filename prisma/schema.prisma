@@ -171,6 +171,14 @@ model DeviceInstance {
   /// goes through a real Authorize/StartTransaction instead (see `src/lib/device-instances/rfid.ts`).
   masterCardIdTag String?
 
+  /// Persisted overrides for the standard OCPP 1.6 `GetConfiguration`/`ChangeConfiguration` keys
+  /// (`HeartbeatInterval`, `AuthorizeRemoteTxRequests`, `ServerURL`, ...) that a real CSMS reads
+  /// and writes — distinct from `parameters` (this instance's copy of the *device model's*
+  /// touchscreen Settings-screen fields, which don't correspond to real OCPP protocol keys).
+  /// Sparse: only holds keys that have been changed away from `PrismaConfigurationStore`'s
+  /// built-in defaults. A JSON string->string map.
+  ocppConfigOverrides Json @default("{}")
+
   status DeviceConnectionStatus @default(DISCONNECTED)
   /// Human-readable detail for the current status, e.g. an error message when FAULTED.
   statusReason    String?

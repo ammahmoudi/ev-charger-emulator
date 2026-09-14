@@ -7,15 +7,16 @@ import QRCode from "qrcode";
 
 import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
 
-const QR_PARAMETER_KEYS = ["qrCodeUrl1", "qrCodeUrl2"] as const;
+const QR_PARAMETER_KEYS = ["QRcodeConnectID1", "QRcodeConnectID2"] as const;
 
 /**
  * QR-code overlay reached from Home's header icon (matching the status/diagnostics overlay's
  * "no header/nav chrome, back-link" pattern — see status/contactor/page.tsx). Renders one QR
- * code per non-empty `qrCodeUrl1`/`qrCodeUrl2` instance parameter — the same two config keys a
- * real CSMS can set remotely via `ChangeConfiguration` (both are ordinary `DeviceModelParameter`
- * rows, so `PrismaConfigurationStore` reads/writes them like any other key), or an operator can
- * set from Settings > Other.
+ * code per non-empty `QRcodeConnectID1`/`QRcodeConnectID2` instance parameter — real OCPP 1.6
+ * config keys (confirmed against a real CSMS's `GetConfiguration` response) that a real CSMS can
+ * set remotely via `ChangeConfiguration` (both are ordinary `DeviceModelParameter` rows, so
+ * `PrismaConfigurationStore` reads/writes them like any other key), or an operator can set from
+ * Settings > Other.
  */
 export default function QrCodePage() {
   const params = useParams<{ id: string }>();
@@ -92,8 +93,8 @@ export default function QrCodePage() {
         </Link>
         <h1 className="text-xl font-semibold text-black dark:text-zinc-50">QR code</h1>
         <p className="text-sm text-zinc-500">
-          Set from Settings &gt; Other (<code className="font-mono text-xs">qrCodeUrl1</code>/
-          <code className="font-mono text-xs">qrCodeUrl2</code>), or remotely by the CSMS via
+          Set from Settings &gt; Other (<code className="font-mono text-xs">QRcodeConnectID1</code>/
+          <code className="font-mono text-xs">QRcodeConnectID2</code>), or remotely by the CSMS via
           <code className="font-mono text-xs"> ChangeConfiguration</code>.
         </p>
       </div>

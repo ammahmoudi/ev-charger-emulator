@@ -29,7 +29,7 @@ export interface OcppConfigurationStore {
   set(key: string, value: string): Promise<OcppChangeConfigurationStatus>;
 }
 
-export type OcppChangeConfigurationStatus = "Accepted" | "Rejected" | "NotSupported";
+export type OcppChangeConfigurationStatus = "Accepted" | "Rejected" | "NotSupported" | "RebootRequired";
 
 /** One connector's currently tracked remote-command state. */
 export interface OcppActiveTransaction {
