@@ -54,6 +54,8 @@ export interface DeviceInstanceDetail {
   name: string;
   chargePointId: string;
   csmsUrl: string;
+  /** Card idTag that always authorizes locally regardless of CSMS connection — see the RFID-simulation flow. */
+  masterCardIdTag: string | null;
   status: DeviceConnectionStatus;
   statusReason: string | null;
   lastConnectedAt: string | null;

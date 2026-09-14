@@ -165,6 +165,12 @@ model DeviceInstance {
   /// CSMS OCPP WebSocket URL to connect to, e.g. ws://localhost:9000/CP1.
   csmsUrl String
 
+  /// A card idTag that always authorizes locally (mirrors a real charger's factory "master card"),
+  /// regardless of CSMS connection state — auto-generated at creation, editable from Settings.
+  /// Any other idTag presented via the RFID-simulation flow requires a live CSMS connection and
+  /// goes through a real Authorize/StartTransaction instead (see `src/lib/device-instances/rfid.ts`).
+  masterCardIdTag String?
+
   status DeviceConnectionStatus @default(DISCONNECTED)
   /// Human-readable detail for the current status, e.g. an error message when FAULTED.
   statusReason    String?
@@ -301,6 +307,11 @@ model DeviceInstanceConnectorState {
   activeTransactionId Int?
   activeStartedAt     DateTime?
   activeChargeRateKw  Float?
+  /// True when the active session was started via a real Authorize/StartTransaction to the CSMS
+  /// (the RFID-simulation flow's non-master-card path — see `src/lib/device-instances/rfid.ts`),
+  /// as opposed to the purely-local simulation. Tells `stopChargingSession` whether it also needs
+  /// to send a real `StopTransaction` so the CSMS's transaction record doesn't dangle open.
+  activeIsRemote Boolean @default(false)
 
   /// Monotonic per-connector counter used to mint `activeTransactionId` values locally.
   transactionCounter Int @default(0)

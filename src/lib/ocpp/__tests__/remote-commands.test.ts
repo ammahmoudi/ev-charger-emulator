@@ -86,7 +86,7 @@ describe("registerRemoteCommandHandlers", () => {
     client = new OcppClient({ url: server.url, reconnect: { enabled: false } });
     session = new OcppChargePointSession(client, { identity: IDENTITY, connectors: CONNECTORS });
     session.on("error", () => {});
-    controller = registerRemoteCommandHandlers(client, session, { resetReconnectDelayMs: 20 });
+    controller = registerRemoteCommandHandlers(client, session, { resetReconnectDelayMs: 20, diagnosticsUploadDelayMs: 20 });
     await bootAndDrain();
   });
 
@@ -233,6 +233,31 @@ describe("registerRemoteCommandHandlers", () => {
 
     it("rejects Reset with a CALLERROR for an invalid type", async () => {
       sendCall("Reset", { type: "Nuclear" }, "reset-2");
+      const [typeId, , errorCode] = await queue.next();
+      expect(typeId).toBe(4);
+      expect(errorCode).toBe("PropertyConstraintViolation");
+    });
+  });
+
+  describe("GetDiagnostics", () => {
+    it("accepts and reports Uploading then Uploaded", async () => {
+      sendCall("GetDiagnostics", { location: "ftp://example.com/diagnostics" }, "diag-1");
+      const [, , confResult] = await queue.next();
+      expect(confResult).toMatchObject({ fileName: expect.stringMatching(/^diagnostics_.*\.zip$/) });
+
+      const [, uploadingMessageId, uploadingAction, uploadingPayload] = await queue.next();
+      expect(uploadingAction).toBe("DiagnosticsStatusNotification");
+      expect(uploadingPayload).toEqual({ status: "Uploading" });
+      serverSocket.send(JSON.stringify([3, uploadingMessageId, {}]));
+
+      const [, uploadedMessageId, uploadedAction, uploadedPayload] = await queue.next();
+      expect(uploadedAction).toBe("DiagnosticsStatusNotification");
+      expect(uploadedPayload).toEqual({ status: "Uploaded" });
+      serverSocket.send(JSON.stringify([3, uploadedMessageId, {}]));
+    });
+
+    it("rejects with a CALLERROR when location is missing", async () => {
+      sendCall("GetDiagnostics", {}, "diag-2");
       const [typeId, , errorCode] = await queue.next();
       expect(typeId).toBe(4);
       expect(errorCode).toBe("PropertyConstraintViolation");

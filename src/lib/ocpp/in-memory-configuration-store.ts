@@ -15,7 +15,8 @@ const DEFAULT_CONFIGURATION_ENTRIES: OcppConfigurationEntry[] = [
 
 /**
  * Simple in-memory {@link OcppConfigurationStore}, seeded with a few standard OCPP 1.6
- * keys. Placeholder until the real DeviceInstance parameter model (#3) is wired in.
+ * keys. Used as the default in tests; real instances use `PrismaConfigurationStore`
+ * (`src/lib/device-instances/prisma-configuration-store.ts`) instead.
  */
 export class InMemoryConfigurationStore implements OcppConfigurationStore {
   private readonly entries: Map<string, OcppConfigurationEntry>;
@@ -24,7 +25,7 @@ export class InMemoryConfigurationStore implements OcppConfigurationStore {
     this.entries = new Map(initial.map((entry) => [entry.key, entry]));
   }
 
-  list(keys?: string[]): { known: OcppConfigurationEntry[]; unknown: string[] } {
+  async list(keys?: string[]): Promise<{ known: OcppConfigurationEntry[]; unknown: string[] }> {
     if (!keys || keys.length === 0) {
       return { known: Array.from(this.entries.values()), unknown: [] };
     }
@@ -42,7 +43,7 @@ export class InMemoryConfigurationStore implements OcppConfigurationStore {
     return { known, unknown };
   }
 
-  set(key: string, value: string): OcppChangeConfigurationStatus {
+  async set(key: string, value: string): Promise<OcppChangeConfigurationStatus> {
     const entry = this.entries.get(key);
     if (!entry) return "NotSupported";
     if (entry.readonly) return "Rejected";

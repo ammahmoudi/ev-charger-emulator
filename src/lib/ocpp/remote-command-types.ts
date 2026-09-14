@@ -13,18 +13,20 @@ export interface OcppConfigurationEntry {
 /**
  * A generic key/value configuration store for `GetConfiguration`/`ChangeConfiguration`.
  *
- * Deliberately storage-agnostic: the real DeviceInstance parameter model (#3) isn't
- * available yet, so callers can inject any implementation (in-memory, Prisma-backed, ...)
- * that satisfies this shape.
+ * Deliberately storage-agnostic and async — callers can inject any implementation (in-memory,
+ * Prisma-backed, ...) that satisfies this shape. `OcppClient`'s handler dispatch already awaits
+ * handler results (see `client.ts`'s `handleIncomingCall`), so a Prisma-backed store can persist
+ * `ChangeConfiguration` writes directly, e.g. into the same `DeviceInstanceParameter` rows the
+ * Settings screen reads (see `PrismaConfigurationStore` in `src/lib/device-instances`).
  */
 export interface OcppConfigurationStore {
   /**
    * Looks up the given keys (or every known key, if omitted).
    * `unknown` lists any requested keys this store has no entry for.
    */
-  list(keys?: string[]): { known: OcppConfigurationEntry[]; unknown: string[] };
+  list(keys?: string[]): Promise<{ known: OcppConfigurationEntry[]; unknown: string[] }>;
   /** Applies a `ChangeConfiguration` request. */
-  set(key: string, value: string): OcppChangeConfigurationStatus;
+  set(key: string, value: string): Promise<OcppChangeConfigurationStatus>;
 }
 
 export type OcppChangeConfigurationStatus = "Accepted" | "Rejected" | "NotSupported";
@@ -41,6 +43,8 @@ export interface RemoteCommandHandlersDeps {
   configStore?: OcppConfigurationStore;
   /** Delay before reconnecting after a `Reset`, to simulate a reboot cycle, in ms. Default: 500. */
   resetReconnectDelayMs?: number;
+  /** Delay before a `GetDiagnostics` upload reports `Uploaded`, in ms. Default: 2000. */
+  diagnosticsUploadDelayMs?: number;
   /** Called when a fire-and-forget follow-up action (e.g. sending `StartTransaction`) fails. */
   onError?: (error: Error) => void;
 }

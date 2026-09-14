@@ -9,6 +9,7 @@ import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { HomeHeaderBar } from "@/components/device-instances/HomeHeaderBar";
 import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
+import { RfidPromptModal } from "@/components/device-instances/RfidPromptModal";
 import { NORMAL_STOP_CAUSES } from "@/lib/device-instances/stop-causes";
 import type { ConnectorRuntimeView, DeviceInstanceDetail, PostChargeSummary } from "@/lib/device-instances/types";
 
@@ -16,6 +17,12 @@ const CONNECTOR_POLL_INTERVAL_MS = 2000;
 const CLOCK_TICK_MS = 1000;
 const DEFAULT_CHARGE_RATE_KW = 7;
 const MANUAL_STOP_CAUSE = NORMAL_STOP_CAUSES[0];
+
+interface RfidPromptState {
+  connectorId: number;
+  connectorLabel: string;
+  maxPowerKw: number | null;
+}
 
 /**
  * The device instance's Home screen (issue #2) — the actual default page for an instance,
@@ -37,6 +44,7 @@ export default function InstanceHomePage() {
   const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
   const [connectorErrors, setConnectorErrors] = useState<Record<number, string>>({});
   const [summary, setSummary] = useState<PostChargeSummary | null>(null);
+  const [rfidPrompt, setRfidPrompt] = useState<RfidPromptState | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadInstance = useCallback(async () => {
@@ -87,23 +95,27 @@ export default function InstanceHomePage() {
     }
   }
 
-  async function handleStartCharging(connectorId: number, maxPowerKw: number | null) {
-    setPendingConnectorId(connectorId);
+  function openRfidPrompt(connectorId: number, connectorLabel: string, maxPowerKw: number | null) {
     setConnectorErrors((prev) => ({ ...prev, [connectorId]: "" }));
+    setRfidPrompt({ connectorId, connectorLabel, maxPowerKw });
+  }
+
+  async function handlePresentCard(idTag: string) {
+    if (!rfidPrompt) return;
+    const { connectorId, maxPowerKw } = rfidPrompt;
+    setPendingConnectorId(connectorId);
     try {
       const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          idTag: `EMULATOR-${Date.now().toString(36).toUpperCase()}`,
-          chargeRateKw: maxPowerKw ?? DEFAULT_CHARGE_RATE_KW,
-        }),
+        body: JSON.stringify({ idTag, chargeRateKw: maxPowerKw ?? DEFAULT_CHARGE_RATE_KW }),
       });
       const data = await res.json();
       if (!res.ok) {
         setConnectorErrors((prev) => ({ ...prev, [connectorId]: data.error ?? "Failed to start charging" }));
         return;
       }
+      setRfidPrompt(null);
       await loadConnectors();
     } finally {
       setPendingConnectorId(null);
@@ -205,7 +217,7 @@ export default function InstanceHomePage() {
                   now={now}
                   pending={pendingConnectorId === connector.connectorId}
                   error={connectorErrors[connector.connectorId] || null}
-                  onStartCharging={() => handleStartCharging(connector.connectorId, connector.maxPowerKw)}
+                  onStartCharging={() => openRfidPrompt(connector.connectorId, connector.label, connector.maxPowerKw)}
                   onStopCharging={() => handleStopCharging(connector.connectorId)}
                   onClearFault={() => handleClearFault(connector.connectorId)}
                 />
@@ -222,6 +234,17 @@ export default function InstanceHomePage() {
       </DeviceScreenFrame>
 
       {summary ? <PostChargeSummaryModal summary={summary} onClose={() => setSummary(null)} /> : null}
+
+      {rfidPrompt ? (
+        <RfidPromptModal
+          connectorLabel={rfidPrompt.connectorLabel}
+          masterCardIdTag={instance.masterCardIdTag}
+          pending={pendingConnectorId === rfidPrompt.connectorId}
+          error={connectorErrors[rfidPrompt.connectorId] || null}
+          onConfirm={handlePresentCard}
+          onCancel={() => setRfidPrompt(null)}
+        />
+      ) : null}
     </div>
   );
 }

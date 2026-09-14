@@ -45,6 +45,7 @@ export async function serializeDeviceInstance(instanceId: string) {
     name: instance.name,
     chargePointId: instance.chargePointId,
     csmsUrl: instance.csmsUrl,
+    masterCardIdTag: instance.masterCardIdTag,
     status: instance.status,
     statusReason: instance.statusReason,
     lastConnectedAt: instance.lastConnectedAt,

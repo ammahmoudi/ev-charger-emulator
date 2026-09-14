@@ -12,14 +12,22 @@ import type { OcppChargePointSession } from "./session";
 import type { OcppClient } from "./client";
 
 const DEFAULT_RESET_RECONNECT_DELAY_MS = 500;
+/** Simulated delay before a `GetDiagnostics` upload reports `Uploaded`, in ms. */
+const DEFAULT_DIAGNOSTICS_UPLOAD_DELAY_MS = 2_000;
 
-const SUPPORTED_TRIGGER_MESSAGES = new Set(["BootNotification", "Heartbeat", "StatusNotification", "MeterValues"]);
+const SUPPORTED_TRIGGER_MESSAGES = new Set([
+  "BootNotification",
+  "Heartbeat",
+  "StatusNotification",
+  "MeterValues",
+  "DiagnosticsStatusNotification",
+]);
 
 /**
  * Registers handlers for CSMS-initiated (remote) OCPP 1.6 commands on top of an
  * {@link OcppClient} and its {@link OcppChargePointSession}: `RemoteStartTransaction`,
  * `RemoteStopTransaction`, `UnlockConnector`, `Reset`, `GetConfiguration`,
- * `ChangeConfiguration`, `ChangeAvailability`, and `TriggerMessage`.
+ * `ChangeConfiguration`, `ChangeAvailability`, `GetDiagnostics`, and `TriggerMessage`.
  */
 export function registerRemoteCommandHandlers(
   client: OcppClient,
@@ -28,6 +36,7 @@ export function registerRemoteCommandHandlers(
 ): RemoteCommandHandlers {
   const configStore: OcppConfigurationStore = deps.configStore ?? new InMemoryConfigurationStore();
   const resetReconnectDelayMs = deps.resetReconnectDelayMs ?? DEFAULT_RESET_RECONNECT_DELAY_MS;
+  const diagnosticsUploadDelayMs = deps.diagnosticsUploadDelayMs ?? DEFAULT_DIAGNOSTICS_UPLOAD_DELAY_MS;
   const onError = deps.onError ?? (() => {});
 
   const activeTransactions = new Map<number, OcppActiveTransaction>();
@@ -155,24 +164,24 @@ export function registerRemoteCommandHandlers(
     return { status: "Accepted" };
   }
 
-  function handleGetConfiguration(
+  async function handleGetConfiguration(
     payload: Record<string, unknown>,
-  ): { configurationKey: OcppConfigurationEntry[]; unknownKey: string[] } {
+  ): Promise<{ configurationKey: OcppConfigurationEntry[]; unknownKey: string[] }> {
     const keys = Array.isArray(payload.key)
       ? payload.key.filter((key): key is string => typeof key === "string")
       : undefined;
-    const { known, unknown } = configStore.list(keys);
+    const { known, unknown } = await configStore.list(keys);
     return { configurationKey: known, unknownKey: unknown };
   }
 
-  function handleChangeConfiguration(
+  async function handleChangeConfiguration(
     payload: Record<string, unknown>,
-  ): { status: OcppChangeConfigurationStatus } {
+  ): Promise<{ status: OcppChangeConfigurationStatus }> {
     const { key, value } = payload;
     if (typeof key !== "string" || typeof value !== "string") {
       throw new OcppCallError("PropertyConstraintViolation", "key and value are required");
     }
-    return { status: configStore.set(key, value) };
+    return { status: await configStore.set(key, value) };
   }
 
   function handleChangeAvailability(
@@ -222,6 +231,38 @@ export function registerRemoteCommandHandlers(
     return { status: scheduled ? "Scheduled" : "Accepted" };
   }
 
+  /**
+   * Simulates a diagnostics upload: this emulator has no real diagnostics bundle to produce, so
+   * it just reports a plausible filename immediately (the `GetDiagnostics.conf`) and then, after
+   * a short delay, sends `DiagnosticsStatusNotification` `Uploading` then `Uploaded` — mirroring
+   * the shape (not the bytes) of a real charge point's upload-to-`location` flow.
+   */
+  async function sendDiagnosticsStatusNotification(status: "Uploading" | "Uploaded" | "UploadFailed"): Promise<void> {
+    await client.call("DiagnosticsStatusNotification", { status });
+  }
+
+  async function performDiagnosticsUpload(): Promise<void> {
+    try {
+      await sendDiagnosticsStatusNotification("Uploading");
+      await new Promise((resolve) => setTimeout(resolve, diagnosticsUploadDelayMs));
+      await sendDiagnosticsStatusNotification("Uploaded");
+    } catch (err) {
+      onError(toError(err));
+    }
+  }
+
+  function handleGetDiagnostics(payload: Record<string, unknown>): { fileName?: string } {
+    const location = payload.location;
+    if (typeof location !== "string" || location.length === 0) {
+      throw new OcppCallError("PropertyConstraintViolation", "location is required");
+    }
+
+    const fileName = `diagnostics_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
+    // Deferred so the GetDiagnostics.conf is always sent before the DiagnosticsStatusNotifications it triggers.
+    setImmediate(() => void performDiagnosticsUpload());
+    return { fileName };
+  }
+
   async function sendMeterValues(connectorId: number): Promise<void> {
     const entry = activeTransactions.get(connectorId);
     const payload: Record<string, unknown> = {
@@ -253,6 +294,9 @@ export function registerRemoteCommandHandlers(
           return;
         case "MeterValues":
           await sendMeterValues(connectorId as number);
+          return;
+        case "DiagnosticsStatusNotification":
+          await sendDiagnosticsStatusNotification("Uploaded");
           return;
       }
     } catch (err) {
@@ -289,6 +333,7 @@ export function registerRemoteCommandHandlers(
   client.registerHandler("GetConfiguration", handleGetConfiguration);
   client.registerHandler("ChangeConfiguration", handleChangeConfiguration);
   client.registerHandler("ChangeAvailability", handleChangeAvailability);
+  client.registerHandler("GetDiagnostics", handleGetDiagnostics);
   client.registerHandler("TriggerMessage", handleTriggerMessage);
 
   return {
@@ -306,6 +351,7 @@ export function registerRemoteCommandHandlers(
       client.unregisterHandler("GetConfiguration");
       client.unregisterHandler("ChangeConfiguration");
       client.unregisterHandler("ChangeAvailability");
+      client.unregisterHandler("GetDiagnostics");
       client.unregisterHandler("TriggerMessage");
     },
   };

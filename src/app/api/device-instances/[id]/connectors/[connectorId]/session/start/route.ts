@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { ConnectorSessionError, startChargingSession } from "@/lib/device-instances/connector-sessions";
+import { ConnectorSessionError } from "@/lib/device-instances/connector-sessions";
 import { badRequest, notFound } from "@/lib/device-instances/http";
+import { presentRfidCard, RfidError } from "@/lib/device-instances/rfid";
 import { prisma } from "@/lib/prisma";
 
 interface StartBody {
@@ -10,7 +11,10 @@ interface StartBody {
 }
 
 /**
- * Starts a locally-simulated charging session on a connector.
+ * Presents an RFID card to start a session on a connector (issue #2's Home screen "Charging"
+ * button and the Cost screen's quick-simulate panel both post here). The instance's master card
+ * always starts a local simulation; any other idTag requires the instance to be connected and
+ * goes through a real Authorize/StartTransaction — see `presentRfidCard`.
  * Body: `{ idTag: string, chargeRateKw: number }`.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; connectorId: string }> }) {
@@ -32,10 +36,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!Number.isFinite(chargeRateKw) || chargeRateKw <= 0) return badRequest("chargeRateKw must be a positive number");
 
   try {
-    const connector = await startChargingSession(id, connectorId, { idTag: body.idTag.trim(), chargeRateKw });
+    const connector = await presentRfidCard(id, connectorId, body.idTag.trim(), chargeRateKw);
     return NextResponse.json({ connector });
   } catch (err) {
-    if (err instanceof ConnectorSessionError) return badRequest(err.message);
+    if (err instanceof ConnectorSessionError || err instanceof RfidError) return badRequest(err.message);
     throw err;
   }
 }

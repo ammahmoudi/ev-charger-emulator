@@ -14,6 +14,7 @@ interface CreateInstanceBody {
   name?: unknown;
   chargePointId?: unknown;
   csmsUrl?: unknown;
+  masterCardIdTag?: unknown;
   parameters?: unknown;
 }
 
@@ -32,6 +33,10 @@ export async function POST(request: Request) {
   if (typeof chargePointId !== "string" || !chargePointId.trim()) return badRequest("chargePointId is required");
   if (typeof csmsUrl !== "string" || !csmsUrl.trim()) return badRequest("csmsUrl is required");
   if (!isValidWebSocketUrl(csmsUrl)) return badRequest("csmsUrl must be a ws:// or wss:// URL", "csmsUrl");
+  if (body.masterCardIdTag !== undefined && typeof body.masterCardIdTag !== "string") {
+    return badRequest("masterCardIdTag must be a string");
+  }
+  const masterCardIdTag = typeof body.masterCardIdTag === "string" ? body.masterCardIdTag.trim() || null : null;
 
   const overrides =
     body.parameters && typeof body.parameters === "object" ? (body.parameters as Record<string, unknown>) : {};
@@ -62,6 +67,7 @@ export async function POST(request: Request) {
         name: name.trim(),
         chargePointId: chargePointId.trim(),
         csmsUrl: csmsUrl.trim(),
+        masterCardIdTag,
         parameters: { create: parameterInputs },
       },
     });

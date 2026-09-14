@@ -55,6 +55,18 @@ export function HomeHeaderBar({
           <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </Link>
+      <Link
+        href={`/instances/${instanceId}/qr`}
+        title="Show QR code"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/15 hover:bg-white/25"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <path d="M14 14h3v3h-3zM14 20h7M20 14v3M17 20v1M20 20v1" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </Link>
       <span className="truncate text-sm font-medium">{name}</span>
 
       <span className="ml-auto text-xs text-white/80">SN: {serialNumber}</span>
