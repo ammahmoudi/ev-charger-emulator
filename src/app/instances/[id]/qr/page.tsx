@@ -10,13 +10,15 @@ import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
 const QR_PARAMETER_KEYS = ["QRcodeConnectID1", "QRcodeConnectID2"] as const;
 
 /**
- * QR-code overlay reached from Home's header icon (matching the status/diagnostics overlay's
- * "no header/nav chrome, back-link" pattern — see status/contactor/page.tsx). Renders one QR
- * code per non-empty `QRcodeConnectID1`/`QRcodeConnectID2` instance parameter — real OCPP 1.6
- * config keys (confirmed against a real CSMS's `GetConfiguration` response) that a real CSMS can
- * set remotely via `ChangeConfiguration` (both are ordinary `DeviceModelParameter` rows, so
- * `PrismaConfigurationStore` reads/writes them like any other key), or an operator can set from
- * Settings > Other.
+ * QR-code overlay reached from a link on the Status/diagnostics overlay (not the Home header bar
+ * — that bar's exact icon layout matches the real device's screenshot 1:1, so a new feature with
+ * no real-device counterpart doesn't belong there; see docs/device-reference/PEVC3107E). Matches
+ * the status/diagnostics overlay's "no header/nav chrome, back-link" pattern — see
+ * status/contactor/page.tsx. Renders one QR code per non-empty `QRcodeConnectID1`/
+ * `QRcodeConnectID2` instance parameter — real OCPP 1.6 config keys (confirmed against a real
+ * CSMS's `GetConfiguration` response) that a real CSMS can set remotely via `ChangeConfiguration`
+ * (both are ordinary `DeviceModelParameter` rows, so `PrismaConfigurationStore` reads/writes them
+ * like any other key), or an operator can set from Settings > Other.
  */
 export default function QrCodePage() {
   const params = useParams<{ id: string }>();
@@ -88,8 +90,8 @@ export default function QrCodePage() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
       <div className="flex flex-col gap-1">
-        <Link href={`/instances/${instanceId}`} className="text-xs text-zinc-500 hover:underline">
-          ← {instance.name}
+        <Link href={`/instances/${instanceId}/status`} className="text-xs text-zinc-500 hover:underline">
+          ← Status / diagnostics
         </Link>
         <h1 className="text-xl font-semibold text-black dark:text-zinc-50">QR code</h1>
         <p className="text-sm text-zinc-500">

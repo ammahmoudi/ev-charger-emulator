@@ -228,6 +228,20 @@ export default function InstanceHomePage() {
           <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
             Charge Prices: <span className="font-mono">{price.toFixed(4)}</span> {currency}/kWh
           </p>
+
+          {instance.masterCardIdTag ? (
+            <p className="text-center text-xs text-zinc-500 dark:text-zinc-400">
+              Master card:{" "}
+              <span className="font-mono text-zinc-700 dark:text-zinc-300">{instance.masterCardIdTag}</span>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(instance.masterCardIdTag ?? "")}
+                className="ml-1.5 underline hover:no-underline"
+              >
+                Copy
+              </button>
+            </p>
+          ) : null}
         </div>
 
         <DeviceBottomNav instanceId={instanceId} />

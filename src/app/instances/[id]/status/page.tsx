@@ -151,19 +151,23 @@ export default function StatusDiagnosticsPage() {
         </div>
           </div>
 
-          {connectors.length > 0 ? (
-            <div className="flex flex-wrap gap-3">
-              {connectors.map((connector) => (
-                <Link
-                  key={connector.id}
-                  href={`/instances/${instanceId}/status/plugs/${connector.id}`}
-                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                >
-                  {connectorDisplayLabel(connector)} details
-                </Link>
-              ))}
-            </div>
-          ) : null}
+          <div className="flex flex-wrap gap-3">
+            {connectors.map((connector) => (
+              <Link
+                key={connector.id}
+                href={`/instances/${instanceId}/status/plugs/${connector.id}`}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+              >
+                {connectorDisplayLabel(connector)} details
+              </Link>
+            ))}
+            <Link
+              href={`/instances/${instanceId}/qr`}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+            >
+              QR code
+            </Link>
+          </div>
         </div>
 
         <DeviceBottomNav instanceId={instanceId} />
