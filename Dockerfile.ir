@@ -19,6 +19,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM install AS build
+# The install stage deliberately builds with NODE_ENV=development (so npm ci installs
+# devDependencies); reset it here before `next build` runs — leaving it as "development"
+# makes Next.js/Turbopack fail prerendering its internal /_global-error page with
+# "TypeError: Cannot read properties of null (reading 'useContext')".
+ENV NODE_ENV=production
 COPY . .
 RUN npx prisma generate
 RUN npm run build
