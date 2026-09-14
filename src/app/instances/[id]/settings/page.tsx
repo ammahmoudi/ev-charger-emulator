@@ -35,6 +35,7 @@ export default function InstanceSettingsPage() {
   const [name, setName] = useState("");
   const [chargePointId, setChargePointId] = useState("");
   const [csmsUrl, setCsmsUrl] = useState("");
+  const [masterCardIdTag, setMasterCardIdTag] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,7 @@ export default function InstanceSettingsPage() {
     setName(data.instance.name);
     setChargePointId(data.instance.chargePointId);
     setCsmsUrl(data.instance.csmsUrl);
+    setMasterCardIdTag(data.instance.masterCardIdTag ?? "");
     const values: Record<string, string> = {};
     for (const p of data.instance.parameters as DeviceInstanceParameterView[]) values[p.key] = p.value ?? "";
     setParamValues(values);
@@ -96,7 +98,7 @@ export default function InstanceSettingsPage() {
       const res = await fetch(`/api/device-instances/${instanceId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, chargePointId, csmsUrl, parameters: paramValues }),
+        body: JSON.stringify({ name, chargePointId, csmsUrl, masterCardIdTag, parameters: paramValues }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -149,9 +151,11 @@ export default function InstanceSettingsPage() {
                 parameters={activeParameters}
                 name={name}
                 chargePointId={chargePointId}
+                masterCardIdTag={masterCardIdTag}
                 fieldErrors={fieldErrors}
                 onNameChange={setName}
                 onChargePointIdChange={setChargePointId}
+                onMasterCardIdTagChange={setMasterCardIdTag}
               />
             ) : (
               <>
@@ -191,17 +195,21 @@ function DeviceTabContent({
   parameters,
   name,
   chargePointId,
+  masterCardIdTag,
   fieldErrors,
   onNameChange,
   onChargePointIdChange,
+  onMasterCardIdTagChange,
 }: {
   instance: DeviceInstanceDetail;
   parameters: DeviceInstanceParameterView[];
   name: string;
   chargePointId: string;
+  masterCardIdTag: string;
   fieldErrors: Record<string, string>;
   onNameChange: (value: string) => void;
   onChargePointIdChange: (value: string) => void;
+  onMasterCardIdTagChange: (value: string) => void;
 }) {
   const byKey = new Map(parameters.map((p) => [p.key, p]));
   const readOnlyRows = [
@@ -230,6 +238,14 @@ function DeviceTabContent({
             required
             value={chargePointId}
             onChange={(e) => onChargePointIdChange(e.target.value)}
+            className={`${compactControlClassName} font-mono`}
+          />
+        </SettingsFieldRow>
+        <SettingsFieldRow label="Master card idTag" error={fieldErrors.masterCardIdTag}>
+          <input
+            value={masterCardIdTag}
+            onChange={(e) => onMasterCardIdTagChange(e.target.value)}
+            placeholder="e.g. MASTER-A1B2C3"
             className={`${compactControlClassName} font-mono`}
           />
         </SettingsFieldRow>

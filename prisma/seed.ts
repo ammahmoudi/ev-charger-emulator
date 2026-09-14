@@ -584,6 +584,25 @@ const pevc3107eParameters: ParameterSeed[] = [
     defaultValue: "0",
     sortOrder: 105,
   },
+  // --- Other tab, page 3 (QR codes) --- two CSMS-configurable URLs (readable/writable via
+  // GetConfiguration/ChangeConfiguration like any other key) that the QR overlay screen
+  // (`/instances/[id]/qr`) renders as scannable QR codes when set.
+  {
+    key: "qrCodeUrl1",
+    label: "QR code URL 1",
+    category: ParameterCategory.OTHER,
+    valueType: ParameterValueType.STRING,
+    defaultValue: "",
+    sortOrder: 106,
+  },
+  {
+    key: "qrCodeUrl2",
+    label: "QR code URL 2",
+    category: ParameterCategory.OTHER,
+    valueType: ParameterValueType.STRING,
+    defaultValue: "",
+    sortOrder: 107,
+  },
 ];
 
 // Charge point identity for the out-of-the-box sample instance created below, so a fresh
@@ -715,6 +734,7 @@ async function seedSampleInstance(deviceModelId: string) {
       name: "Demo PEVC3107E",
       chargePointId: SAMPLE_INSTANCE_CHARGE_POINT_ID,
       csmsUrl: `ws://localhost:9000/${SAMPLE_INSTANCE_CHARGE_POINT_ID}`,
+      masterCardIdTag: "MASTER0001",
       parameters: {
         create: parameters.map((parameter) => ({
           deviceModelParameterId: parameter.id,

@@ -1,7 +1,15 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
-import { OcppChargePointSession, OcppClient, type OcppConnectorStatusInfo } from "@/lib/ocpp";
+import { PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
+import {
+  OcppChargePointSession,
+  OcppClient,
+  registerRemoteCommandHandlers,
+  type OcppConnectionState,
+  type OcppConnectorStatusInfo,
+  type RemoteCommandHandlers,
+} from "@/lib/ocpp";
 import { orderModelConnectors } from "./connectors";
 import { prisma } from "@/lib/prisma";
 
@@ -16,6 +24,7 @@ import { prisma } from "@/lib/prisma";
 interface RuntimeEntry {
   client: OcppClient;
   session: OcppChargePointSession;
+  remoteCommands: RemoteCommandHandlers;
   manuallyStopped: boolean;
 }
 
@@ -56,7 +65,15 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
     })),
   });
 
-  const entry: RuntimeEntry = { client, session, manuallyStopped: false };
+  const remoteCommands = registerRemoteCommandHandlers(client, session, {
+    configStore: new PrismaConfigurationStore(instance.id),
+    onError: (err) => {
+      if (entry.manuallyStopped) return;
+      void writeStatus(instance.id, { statusReason: err.message });
+    },
+  });
+
+  const entry: RuntimeEntry = { client, session, remoteCommands, manuallyStopped: false };
 
   client.on("connecting", () => {
     if (entry.manuallyStopped) return;
@@ -156,6 +173,7 @@ export function disposeDeviceInstance(instanceId: string): void {
   const entry = registry.get(instanceId);
   if (!entry) return;
   entry.manuallyStopped = true;
+  entry.remoteCommands.dispose();
   entry.session.dispose();
   entry.client.disconnect();
   registry.delete(instanceId);
@@ -164,6 +182,34 @@ export function disposeDeviceInstance(instanceId: string): void {
 /** Live, locally-tracked per-connector status for a running instance; empty if never started in this process. */
 export function getInstanceConnectorStatuses(instanceId: string): OcppConnectorStatusInfo[] {
   return registry.get(instanceId)?.session.listConnectorStatuses() ?? [];
+}
+
+/**
+ * The live OCPP connection state for an instance that has been started in this process
+ * ("disconnected" if it's never been started at all) — used by the RFID-simulation flow
+ * (`src/lib/device-instances/rfid.ts`) to require a real CSMS connection before sending a real
+ * `Authorize`/`StartTransaction`.
+ */
+export function getRuntimeConnectionState(instanceId: string): OcppConnectionState {
+  return registry.get(instanceId)?.client.getState() ?? "disconnected";
+}
+
+/**
+ * Sends a raw OCPP call over an instance's live connection, creating the runtime entry (but not
+ * opening the WebSocket — callers must check `getRuntimeConnectionState` first) if needed. Kept
+ * as a thin wrapper rather than exposing the raw `OcppClient` so callers can't reach past it into
+ * connection lifecycle management (`connect`/`disconnect`), which stays `runtime.ts`'s job.
+ */
+export async function callOcpp(
+  instanceId: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  const instance = await prisma.deviceInstance.findUniqueOrThrow({
+    where: { id: instanceId },
+    include: { deviceModel: { include: { connectors: true } } },
+  });
+  return getOrCreateEntry(instance).client.call(action, payload);
 }
 
 /**

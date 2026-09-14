@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ParameterField } from "@/components/device-instances/ParameterField";
+import { generateMasterCardIdTag } from "@/lib/device-instances/rfid-utils";
 import {
   PARAMETER_CATEGORY_LABELS,
   PARAMETER_CATEGORY_ORDER,
@@ -20,6 +21,7 @@ export default function NewInstancePage() {
   const [name, setName] = useState("");
   const [chargePointId, setChargePointId] = useState("");
   const [csmsUrl, setCsmsUrl] = useState("");
+  const [masterCardIdTag, setMasterCardIdTag] = useState(() => generateMasterCardIdTag());
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export default function NewInstancePage() {
           name,
           chargePointId,
           csmsUrl,
+          masterCardIdTag,
           parameters: paramValues,
         }),
       });
@@ -153,6 +156,33 @@ export default function NewInstancePage() {
             className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
           />
           {fieldErrors.csmsUrl ? <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.csmsUrl}</p> : null}
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Master card idTag</label>
+          <div className="flex gap-2">
+            <input
+              value={masterCardIdTag}
+              onChange={(e) => setMasterCardIdTag(e.target.value)}
+              placeholder="e.g. MASTER-A1B2C3"
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            />
+            <button
+              type="button"
+              onClick={() => setMasterCardIdTag(generateMasterCardIdTag())}
+              className="shrink-0 rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Regenerate
+            </button>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Presenting this card via the RFID-simulation flow always starts a session locally, even without a CSMS
+            connection — like a real charger&apos;s factory master card. Any other card requires the instance to be
+            connected.
+          </p>
+          {fieldErrors.masterCardIdTag ? (
+            <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.masterCardIdTag}</p>
+          ) : null}
         </div>
 
         {parametersByCategory.length > 0 ? (

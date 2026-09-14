@@ -18,6 +18,7 @@ interface UpdateInstanceBody {
   name?: unknown;
   chargePointId?: unknown;
   csmsUrl?: unknown;
+  masterCardIdTag?: unknown;
   parameters?: unknown;
 }
 
@@ -38,7 +39,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return badRequest("Request body must be JSON");
   }
 
-  const data: { name?: string; chargePointId?: string; csmsUrl?: string } = {};
+  const data: { name?: string; chargePointId?: string; csmsUrl?: string; masterCardIdTag?: string | null } = {};
 
   if (body.name !== undefined) {
     if (typeof body.name !== "string" || !body.name.trim()) return badRequest("name must be a non-empty string");
@@ -55,6 +56,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       return badRequest("csmsUrl must be a ws:// or wss:// URL", "csmsUrl");
     }
     data.csmsUrl = body.csmsUrl.trim();
+  }
+  if (body.masterCardIdTag !== undefined) {
+    if (typeof body.masterCardIdTag !== "string") return badRequest("masterCardIdTag must be a string");
+    data.masterCardIdTag = body.masterCardIdTag.trim() || null;
   }
 
   // Changing the CSMS URL invalidates any runtime client already bound to the old one — drop

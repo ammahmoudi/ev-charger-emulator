@@ -1,5 +1,6 @@
 import { orderModelConnectors } from "@/lib/device-instances/connectors";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
+import { callOcpp } from "@/lib/device-instances/runtime";
 import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
@@ -262,6 +263,54 @@ export async function startChargingSession(
   return view;
 }
 
+/**
+ * Persists an already-started real OCPP session — a real `Authorize`/`StartTransaction` already
+ * succeeded against the live CSMS (see `src/lib/device-instances/rfid.ts`'s non-master-card RFID
+ * path) — into this module's connector state, so the Home screen's existing Charging timer/energy
+ * readout and Stop flow work for it exactly like a local simulated session. Skips `Preparing`
+ * (the real `Authorize` call already covered "waiting for authorization") and starts `Charging`
+ * immediately with the CSMS's own transaction id, marked `activeIsRemote` so `stopChargingSession`
+ * knows to also send a real `StopTransaction` when this session ends.
+ */
+export async function adoptRemoteSession(
+  deviceInstanceId: string,
+  connectorId: number,
+  options: { idTag: string; transactionId: number; chargeRateKw: number },
+): Promise<ConnectorRuntimeView> {
+  const state = await getOrCreateState(deviceInstanceId, connectorId);
+  if (state.activeStartedAt) {
+    throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);
+  }
+
+  const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
+  const startedAt = new Date();
+
+  await prisma.deviceInstanceConnectorState.update({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
+    data: {
+      status: "Charging",
+      locked: true,
+      activeIdTag: options.idTag,
+      activeTransactionId: options.transactionId,
+      activeStartedAt: startedAt,
+      activeChargeRateKw: options.chargeRateKw,
+      activeIsRemote: true,
+      transactionCounter: Math.max(state.transactionCounter, options.transactionId),
+    },
+  });
+
+  await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Charging`, startedAt);
+  await logDeviceInstanceEvent(
+    deviceInstanceId,
+    "TRANSACTION_STARTED",
+    `${label}: transaction #${options.transactionId} started (card ${options.idTag}, via CSMS)`,
+    startedAt,
+  );
+
+  const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
+  return view;
+}
+
 async function getFeeRateParams(
   deviceInstanceId: string,
 ): Promise<{ pricePerKwh: number; currency: string | null; serviceFeePerSession: number }> {
@@ -312,6 +361,24 @@ export async function stopChargingSession(
   const cost = energyWh > 0 ? round2((energyWh / WH_PER_KWH) * pricePerKwh + serviceFeePerSession) : 0;
   const isFault = isFaultStopCause(options.stopCause);
 
+  if (state.activeIsRemote && state.activeTransactionId != null) {
+    try {
+      await callOcpp(deviceInstanceId, "StopTransaction", {
+        transactionId: state.activeTransactionId,
+        meterStop: Math.round(energyWh),
+        timestamp: stoppedAt.toISOString(),
+        reason: options.stopCause,
+      });
+    } catch (err) {
+      await logDeviceInstanceEvent(
+        deviceInstanceId,
+        "FAULT",
+        `${label}: failed to notify CSMS of StopTransaction #${state.activeTransactionId} (${err instanceof Error ? err.message : String(err)})`,
+        stoppedAt,
+      );
+    }
+  }
+
   await prisma.deviceInstanceSession.create({
     data: {
       deviceInstanceId,
@@ -337,6 +404,7 @@ export async function stopChargingSession(
       activeTransactionId: null,
       activeStartedAt: null,
       activeChargeRateKw: null,
+      activeIsRemote: false,
     },
   });
 
