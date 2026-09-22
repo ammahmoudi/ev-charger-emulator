@@ -1,3 +1,4 @@
+import { DeviceConnectionStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { disposeDiagnosticState } from "@/lib/device-instances/diagnostics";
@@ -39,7 +40,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return badRequest("Request body must be JSON");
   }
 
-  const data: { name?: string; chargePointId?: string; csmsUrl?: string; masterCardIdTag?: string | null } = {};
+  const data: {
+    name?: string;
+    chargePointId?: string;
+    csmsUrl?: string;
+    masterCardIdTag?: string | null;
+    status?: DeviceConnectionStatus;
+    statusReason?: string | null;
+  } = {};
 
   if (body.name !== undefined) {
     if (typeof body.name !== "string" || !body.name.trim()) return badRequest("name must be a non-empty string");
@@ -64,8 +72,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   // Changing the CSMS URL invalidates any runtime client already bound to the old one — drop
   // it so the next start rebuilds against the new URL instead of silently reconnecting to the old.
+  // disposeDeviceInstance() closes the socket without writing DeviceInstance.status (it's a
+  // "manually stopped" teardown, which suppresses the client's own disconnect-status write), so
+  // without this the UI would keep showing CONNECTED/CONNECTING against a socket that's actually
+  // been torn down until the user separately stops/starts the instance.
   if (data.csmsUrl !== undefined && data.csmsUrl !== existing.csmsUrl) {
     disposeDeviceInstance(id);
+    if (existing.status !== DeviceConnectionStatus.DISCONNECTED) {
+      data.status = DeviceConnectionStatus.DISCONNECTED;
+      data.statusReason = "CSMS URL changed — restart the instance to reconnect";
+    }
   }
 
   let parameterUpdates: { key: string; deviceModelParameterId: string; value: string | null }[] = [];
