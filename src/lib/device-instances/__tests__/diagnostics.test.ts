@@ -34,7 +34,12 @@ describe("setOverallHealthField", () => {
   });
 });
 
-describe("interface board readings", () => {
+// `resolveNumericConnectorId` (called by `getInterfaceBoardReading`/`setInterfaceBoardToggleField`/
+// `setContactorField`/`getPlugOutputCurrent`) does a real Prisma lookup even for a not-found
+// instance/connector — it only handles "not found", not "DATABASE_URL unset" (Prisma throws a
+// validation error before ever reaching the network in that case). So these need the same DB gate
+// as the "derived from real session data" block below, even though they don't create any rows.
+describe.skipIf(!process.env.DATABASE_URL)("interface board readings", () => {
   // `resolveNumericConnectorId` looks the instance up in the DB; a not-found instance (as every
   // random id here is) resolves to `null`, so these fall back to the plug's baseline/defaults —
   // exercised for real against a persisted instance in the "derived from real session data" block below.
@@ -65,7 +70,7 @@ describe("interface board readings", () => {
   });
 });
 
-describe("getPlugOutputCurrent", () => {
+describe.skipIf(!process.env.DATABASE_URL)("getPlugOutputCurrent", () => {
   it("is zero for an unknown instance (no active session to derive from)", async () => {
     const current = await getPlugOutputCurrent(`instance-${Math.random()}`, "connector-1");
     expect(current).toBe(0);
