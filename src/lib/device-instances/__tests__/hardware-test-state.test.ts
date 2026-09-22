@@ -27,6 +27,13 @@ function createDeps(overrides: Partial<HardwareTestStateDeps> = {}) {
     getConnectors: vi.fn().mockResolvedValue(CONNECTORS),
     getSession: vi.fn().mockResolvedValue({ setConnectorStatus }),
     getActiveConnectorSession: vi.fn().mockResolvedValue(null),
+    // No persisted state by default (fresh instance) and no-op writes — these tests exercise
+    // pure in-memory state transitions, not persistence itself (see prisma-backed coverage in
+    // "hardware-test-state persistence (integration)" below).
+    loadPersistedInstanceSettings: vi.fn().mockResolvedValue(null),
+    savePersistedInstanceSettings: vi.fn().mockResolvedValue(undefined),
+    loadPersistedPlugToggles: vi.fn().mockResolvedValue(null),
+    savePersistedPlugToggles: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   return { deps, setConnectorStatus };

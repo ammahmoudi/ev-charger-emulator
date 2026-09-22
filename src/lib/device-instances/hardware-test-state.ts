@@ -79,6 +79,20 @@ export interface HardwareTestStateDeps {
    * `setOutputRunning` below. Injectable so tests don't need a real instance/DB row.
    */
   getActiveConnectorSession: (instanceId: string, connectorId: number) => Promise<{ status: string } | null>;
+  /**
+   * Loads/saves this instance's persisted toggle state (charging-test settings + pile
+   * contactor/breaker positions) and, per connector, its persisted plug toggles
+   * (`outputRunning`/`auxPowerMode`/`lockStatus`) — round 2's restart-survival fix (see
+   * AUDIT-state.md). Injectable, same DI pattern as `getConnectors`/`getSession`/
+   * `getActiveConnectorSession` above, so this module's own behavior tests don't need a real DB
+   * row just to exercise state transitions; the default (`fetchPersistedInstanceSettings`/
+   * `writePersistedInstanceSettings`/`fetchPersistedPlugToggles`/`writePersistedPlugToggles`
+   * below) is Prisma-backed.
+   */
+  loadPersistedInstanceSettings: (instanceId: string) => Promise<PersistedInstanceSettings | null>;
+  savePersistedInstanceSettings: (instanceId: string, settings: PersistedInstanceSettings) => Promise<void>;
+  loadPersistedPlugToggles: (instanceId: string, connectorId: number) => Promise<PersistedPlugToggles | null>;
+  savePersistedPlugToggles: (instanceId: string, connectorId: number, toggles: PersistedPlugToggles) => Promise<void>;
 }
 
 async function fetchActiveConnectorSession(instanceId: string, connectorId: number): Promise<{ status: string } | null> {
@@ -107,6 +121,10 @@ const defaultDeps: HardwareTestStateDeps = {
   getConnectors: fetchConnectors,
   getSession: getOrCreateChargePointSession,
   getActiveConnectorSession: fetchActiveConnectorSession,
+  loadPersistedInstanceSettings: fetchPersistedInstanceSettings,
+  savePersistedInstanceSettings: writePersistedInstanceSettings,
+  loadPersistedPlugToggles: fetchPersistedPlugToggles,
+  savePersistedPlugToggles: writePersistedPlugToggles,
 };
 
 const globalForHardwareTest = globalThis as unknown as {
@@ -165,17 +183,24 @@ function round(value: number, decimals: number): number {
 }
 
 /** `InternalState`'s persisted-only fields — chargingTest settings + pile contactor/breaker positions. Everything else (plugs, iccid/imei) is handled separately. */
-interface PersistedInstanceSettings {
+export interface PersistedInstanceSettings {
   chargingTest?: { interfaceBoardTestMode?: boolean; outputMode?: ChargingOutputMode; selectedConnectorId?: number };
   pile?: Partial<InternalPileState>;
 }
 
-async function loadPersistedInstanceSettings(instanceId: string): Promise<PersistedInstanceSettings | null> {
+async function fetchPersistedInstanceSettings(instanceId: string): Promise<PersistedInstanceSettings | null> {
   const row = await prisma.deviceInstance.findUnique({ where: { id: instanceId }, select: { hardwareTestInstanceState: true } });
   return (row?.hardwareTestInstanceState as PersistedInstanceSettings | null) ?? null;
 }
 
-async function persistInstanceSettings(instanceId: string, state: InternalState): Promise<void> {
+async function writePersistedInstanceSettings(instanceId: string, data: PersistedInstanceSettings): Promise<void> {
+  await prisma.deviceInstance.update({
+    where: { id: instanceId },
+    data: { hardwareTestInstanceState: data as Prisma.InputJsonValue },
+  });
+}
+
+async function persistInstanceSettings(instanceId: string, state: InternalState, deps: HardwareTestStateDeps): Promise<void> {
   const data: PersistedInstanceSettings = {
     chargingTest: {
       interfaceBoardTestMode: state.interfaceBoardTestMode,
@@ -185,40 +210,41 @@ async function persistInstanceSettings(instanceId: string, state: InternalState)
     pile: state.pile,
   };
   try {
-    await prisma.deviceInstance.update({
-      where: { id: instanceId },
-      data: { hardwareTestInstanceState: data as Prisma.InputJsonValue },
-    });
+    await deps.savePersistedInstanceSettings(instanceId, data);
   } catch (err) {
     console.error(`Failed to persist hardware-test instance settings for ${instanceId}:`, err);
   }
 }
 
-interface PersistedPlugToggles {
+export interface PersistedPlugToggles {
   outputRunning?: boolean;
   auxPowerMode?: AuxPowerMode;
   lockStatus?: "Locked" | "Unlocked";
 }
 
-async function loadPersistedPlugToggles(instanceId: string, connectorId: number): Promise<PersistedPlugToggles | null> {
+async function fetchPersistedPlugToggles(instanceId: string, connectorId: number): Promise<PersistedPlugToggles | null> {
   const row = await prisma.deviceInstanceConnectorDiagnosticState.findUnique({
     where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId } },
   });
   return (row?.hardwareTestToggles as PersistedPlugToggles | null) ?? null;
 }
 
-async function persistPlugToggles(instanceId: string, plug: InternalPlugState): Promise<void> {
+async function writePersistedPlugToggles(instanceId: string, connectorId: number, toggles: PersistedPlugToggles): Promise<void> {
+  await prisma.deviceInstanceConnectorDiagnosticState.upsert({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId } },
+    create: { deviceInstanceId: instanceId, connectorId, hardwareTestToggles: toggles as Prisma.InputJsonValue },
+    update: { hardwareTestToggles: toggles as Prisma.InputJsonValue },
+  });
+}
+
+async function persistPlugToggles(instanceId: string, plug: InternalPlugState, deps: HardwareTestStateDeps): Promise<void> {
   const toggles: PersistedPlugToggles = {
     outputRunning: plug.outputRunning,
     auxPowerMode: plug.auxPowerMode,
     lockStatus: plug.lockStatus,
   };
   try {
-    await prisma.deviceInstanceConnectorDiagnosticState.upsert({
-      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: plug.connectorId } },
-      create: { deviceInstanceId: instanceId, connectorId: plug.connectorId, hardwareTestToggles: toggles as Prisma.InputJsonValue },
-      update: { hardwareTestToggles: toggles as Prisma.InputJsonValue },
-    });
+    await deps.savePersistedPlugToggles(instanceId, plug.connectorId, toggles);
   } catch (err) {
     console.error(`Failed to persist hardware-test toggles for ${instanceId} connector ${plug.connectorId}:`, err);
   }
@@ -231,10 +257,14 @@ async function persistPlugToggles(instanceId: string, plug: InternalPlugState): 
  * (fault-injection-adjacent test-panel positions) survive a restart; the `registry` Map below is
  * just a same-process cache over that, avoiding a DB round-trip on every poll.
  */
-async function getOrCreateInternalState(instanceId: string, connectors: ConnectorRef[]): Promise<InternalState> {
+async function getOrCreateInternalState(
+  instanceId: string,
+  connectors: ConnectorRef[],
+  deps: HardwareTestStateDeps,
+): Promise<InternalState> {
   let state = registry.get(instanceId);
   if (!state) {
-    const persisted = await loadPersistedInstanceSettings(instanceId);
+    const persisted = await deps.loadPersistedInstanceSettings(instanceId);
     state = {
       interfaceBoardTestMode: persisted?.chargingTest?.interfaceBoardTestMode ?? false,
       outputMode: persisted?.chargingTest?.outputMode ?? "FullLoadOutput",
@@ -254,7 +284,7 @@ async function getOrCreateInternalState(instanceId: string, connectors: Connecto
 
   for (const connector of connectors) {
     if (!state.plugs.has(connector.connectorId)) {
-      const persistedPlug = await loadPersistedPlugToggles(instanceId, connector.connectorId);
+      const persistedPlug = await deps.loadPersistedPlugToggles(instanceId, connector.connectorId);
       state.plugs.set(connector.connectorId, {
         connectorId: connector.connectorId,
         label: connector.label,
@@ -347,7 +377,7 @@ function requirePlug(state: InternalState, connectorId: number): InternalPlugSta
 /** Current hardware test state for an instance, with all readouts freshly (re)computed. */
 export async function getHardwareTestState(instanceId: string, deps: HardwareTestStateDeps = defaultDeps): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
   return renderState(instanceId, state, connectors);
 }
 
@@ -358,7 +388,7 @@ export async function setChargingTestSettings(
   deps: HardwareTestStateDeps = defaultDeps,
 ): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
 
   if (updates.interfaceBoardTestMode !== undefined) state.interfaceBoardTestMode = updates.interfaceBoardTestMode;
   if (updates.outputMode !== undefined) state.outputMode = updates.outputMode;
@@ -366,7 +396,7 @@ export async function setChargingTestSettings(
     requirePlug(state, updates.selectedConnectorId);
     state.selectedConnectorId = updates.selectedConnectorId;
   }
-  await persistInstanceSettings(instanceId, state);
+  await persistInstanceSettings(instanceId, state, deps);
 
   return renderState(instanceId, state, connectors);
 }
@@ -390,7 +420,7 @@ async function setOutputRunning(
   deps: HardwareTestStateDeps,
 ): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
   const plug = requirePlug(state, connectorId);
 
   if (running && !plug.outputRunning) {
@@ -403,7 +433,7 @@ async function setOutputRunning(
   }
 
   plug.outputRunning = running;
-  await persistPlugToggles(instanceId, plug);
+  await persistPlugToggles(instanceId, plug, deps);
   const session = await deps.getSession(instanceId);
   session.setConnectorStatus(connectorId, running ? "Charging" : "Available");
 
@@ -462,10 +492,10 @@ export async function setAuxPowerAction(
   deps: HardwareTestStateDeps = defaultDeps,
 ): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
   const plug = requirePlug(state, connectorId);
   plug.auxPowerMode = action === "stop" ? "Off" : action;
-  await persistPlugToggles(instanceId, plug);
+  await persistPlugToggles(instanceId, plug, deps);
   return renderState(instanceId, state, connectors);
 }
 
@@ -477,10 +507,10 @@ export async function setLockAction(
   deps: HardwareTestStateDeps = defaultDeps,
 ): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
   const plug = requirePlug(state, connectorId);
   plug.lockStatus = action === "start" ? "Locked" : "Unlocked";
-  await persistPlugToggles(instanceId, plug);
+  await persistPlugToggles(instanceId, plug, deps);
   return renderState(instanceId, state, connectors);
 }
 
@@ -492,10 +522,10 @@ export async function setPileContactorAction(
   deps: HardwareTestStateDeps = defaultDeps,
 ): Promise<HardwareTestState> {
   const connectors = await deps.getConnectors(instanceId);
-  const state = await getOrCreateInternalState(instanceId, connectors);
+  const state = await getOrCreateInternalState(instanceId, connectors, deps);
   const value: ContactState = action === "start" ? "Closed" : "Open";
   if (target === "breaker") state.pile.breakerStatus = value;
   else state.pile[target] = value;
-  await persistInstanceSettings(instanceId, state);
+  await persistInstanceSettings(instanceId, state, deps);
   return renderState(instanceId, state, connectors);
 }

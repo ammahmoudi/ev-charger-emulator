@@ -14,7 +14,10 @@ import {
 } from "../diagnostics";
 import { prisma } from "@/lib/prisma";
 
-describe("getOverallHealth", () => {
+// getOverallHealth/setOverallHealthField now read/write DeviceInstance.diagnosticsInstanceState
+// (round 2's toggle-state persistence, see AUDIT-state.md) via a real Prisma call even for a
+// not-found instance — same DB-gate reasoning as "interface board readings" below.
+describe.skipIf(!process.env.DATABASE_URL)("getOverallHealth", () => {
   it("defaults every health field to normal for a fresh instance", async () => {
     const overall = await getOverallHealth(`instance-${Math.random()}`);
     for (const field of OVERALL_HEALTH_FIELDS) {
@@ -23,7 +26,7 @@ describe("getOverallHealth", () => {
   });
 });
 
-describe("setOverallHealthField", () => {
+describe.skipIf(!process.env.DATABASE_URL)("setOverallHealthField", () => {
   it("flips one field to abnormal without affecting the others", async () => {
     const id = `instance-${Math.random()}`;
     const updated = await setOverallHealthField(id, "circuitBreakerStatus", "abnormal");
@@ -78,7 +81,8 @@ describe.skipIf(!process.env.DATABASE_URL)("getPlugOutputCurrent", () => {
   });
 });
 
-describe("communication modules", () => {
+// Also touches DeviceInstance.diagnosticsInstanceState now — same reasoning as above.
+describe.skipIf(!process.env.DATABASE_URL)("communication modules", () => {
   it("returns 14 modules, all normal by default", async () => {
     const id = `instance-${Math.random()}`;
     const modules = await getCommunicationModules(id);
