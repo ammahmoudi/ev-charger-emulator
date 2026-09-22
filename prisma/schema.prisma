@@ -64,6 +64,24 @@ enum DeviceConnectionStatus {
   FAULTED
 }
 
+/// Authorization outcome an idTag carries in the local authorization list/cache, mirroring
+/// OCPP 1.6's `AuthorizationStatus` values a charger can decide locally without contacting the CSMS.
+enum LocalAuthEntryStatus {
+  ACCEPTED
+  BLOCKED
+  EXPIRED
+}
+
+/// OCPP action queued in a device instance's offline outbox (see `DeviceInstanceOutboxMessage`).
+/// Values are the literal OCPP 1.6 action names (PascalCase, not SCREAMING_CASE like this file's
+/// other enums) because `outbox.ts::drainOutbox` passes `message.action` straight through as the
+/// `callOcpp(deviceInstanceId, action, payload)` action string — there's no separate mapping step.
+enum OutboxAction {
+  StartTransaction
+  StopTransaction
+  MeterValues
+}
+
 /// A reusable charger-family template (e.g. "PEVC3107E") that device instances are
 /// created from. Holds identity, connector topology, and the typed parameter schema
 /// describing every configurable field shown across the device's settings tabs.
@@ -176,15 +194,71 @@ model DeviceInstance {
   statusReason    String?
   lastConnectedAt DateTime?
 
+  /// Set while a simulated firmware upgrade (`maintenance.ts::startFirmwareUpgrade`) is in
+  /// flight, cleared on completion. Persisted (rather than only the in-memory completion
+  /// timer) so a process restart mid-upgrade can detect and finish the stale upgrade instead
+  /// of leaving connectors stuck `Unavailable` forever — see `maintenance.ts::resolveStaleFirmwareUpgrade`.
+  firmwareUpgradeStartedAt DateTime?
+
   parameters       DeviceInstanceParameter[]
   events           DeviceInstanceEvent[]
   sessions         DeviceInstanceSession[]
   connectorStates  DeviceInstanceConnectorState[]
+  localAuthEntries DeviceInstanceLocalAuthEntry[]
+  outboxMessages   DeviceInstanceOutboxMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([deviceModelId])
+}
+
+/// One entry in a device instance's local authorization list/cache (mirrors a real charger's
+/// `SendLocalList`-populated table plus its authorization cache), letting `rfid.ts::presentRfidCard`
+/// authorize a known idTag locally — offline or online — without a live CSMS round-trip, the same
+/// way the single `masterCardIdTag` already does. `cacheExpiryDateTime` models the CSMS-assigned
+/// expiry an `Authorize`/`StartTransaction` response's `idTagInfo` carries; a null value never expires
+/// (matches a `SendLocalList`-seeded entry, as opposed to a cached `Authorize` response).
+model DeviceInstanceLocalAuthEntry {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  idTag  String
+  status LocalAuthEntryStatus @default(ACCEPTED)
+
+  cacheExpiryDateTime DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, idTag])
+  @@index([deviceInstanceId])
+}
+
+/// A queued OCPP call that should have reached the CSMS but couldn't (offline, or the call
+/// failed) — a real charger's "local storage" transaction queue. Drained in order on reconnect
+/// (see `runtime.ts`'s `bootAccepted` handler / `outbox.ts::drainOutbox`), so a StopTransaction
+/// generated while disconnected isn't silently dropped, matching a real charger replaying queued
+/// Start/Stop/MeterValues messages once its CSMS link comes back.
+model DeviceInstanceOutboxMessage {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  action  OutboxAction
+  /// The OCPP call payload, exactly as it would be sent via `callOcpp(deviceInstanceId, action, payload)`.
+  payload Json
+
+  attempts  Int      @default(0)
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deviceInstanceId, createdAt])
 }
 
 /// One parameter value belonging to a device instance — a per-instance, editable copy of
@@ -307,6 +381,13 @@ model DeviceInstanceConnectorState {
   activeTransactionId Int?
   activeStartedAt     DateTime?
   activeChargeRateKw  Float?
+  /// Set when a stopped session enters the `Finishing` hold (mirrors real `PEVC3107E`
+  /// `StatusNotification` traffic: `Charging`/`Preparing` -> `Finishing` -> `Available`/`Faulted`)
+  /// instead of jumping straight to the final status. Cleared once `resolveFinishingPromotion`
+  /// (`connector-sessions.ts`) promotes the connector past the hold.
+  finishingSince      DateTime?
+  /// The status `finishingSince` will resolve to once its hold elapses ("Available" or "Faulted").
+  finishingNextStatus String?
   /// True when the active session was started via a real Authorize/StartTransaction to the CSMS
   /// (the RFID-simulation flow's non-master-card path — see `src/lib/device-instances/rfid.ts`),
   /// as opposed to the purely-local simulation. Tells `stopChargingSession` whether it also needs

@@ -1,6 +1,7 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
+import { drainOutbox } from "@/lib/device-instances/outbox";
 import { PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
 import {
   OcppChargePointSession,
@@ -55,7 +56,11 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
   const client = new OcppClient({ url: instance.csmsUrl });
   const session = new OcppChargePointSession(client, {
     identity: {
-      chargePointVendor: instance.deviceModel.manufacturer,
+      // Real hardware reports the reseller-facing brand (e.g. "SINO") as chargePointVendor, not
+      // the internal manufacturer code ("PEVC") — confirmed against every real PEVC3107E
+      // station's BootNotification in the CitrineOS DB. Fall back to manufacturer for models
+      // that don't set a brand.
+      chargePointVendor: instance.deviceModel.brand ?? instance.deviceModel.manufacturer,
       chargePointModel: instance.deviceModel.model,
       chargePointSerialNumber: instance.chargePointId,
     },
@@ -88,6 +93,14 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
     if (entry.manuallyStopped) return;
     void writeStatus(instance.id, { statusReason: err.message });
   });
+  // `OcppChargePointSession` emits "error" for a failed BootNotification/Heartbeat/
+  // StatusNotification send (e.g. the connection dropped mid-call) — Node's EventEmitter throws
+  // synchronously if an "error" event has no listener, which would otherwise crash the process
+  // on a transient send failure instead of just recording it like `client.on("error", ...)` does.
+  session.on("error", (err) => {
+    if (entry.manuallyStopped) return;
+    void writeStatus(instance.id, { statusReason: err.message });
+  });
   session.on("bootAccepted", () => {
     void writeStatus(instance.id, {
       status: DeviceConnectionStatus.CONNECTED,
@@ -96,6 +109,12 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
     });
     void logDeviceInstanceEvent(instance.id, "CONNECTED", "Connected to CSMS");
     void logDeviceInstanceEvent(instance.id, "BOOT", "BootNotification accepted");
+    // Replay this instance's offline "local storage" queue (see outbox.ts) now that the CSMS
+    // link is back — a real charger flushes queued Start/Stop/MeterValues on reconnect instead
+    // of leaving them stranded.
+    void drainOutbox(instance.id, (action, payload) => callOcpp(instance.id, action, payload)).catch((err) => {
+      console.error(`Failed to drain outbox for ${instance.id}:`, err);
+    });
   });
   session.on("bootPending", ({ retryInMs }) => {
     if (entry.manuallyStopped) return;
@@ -227,4 +246,36 @@ export async function getOrCreateChargePointSession(instanceId: string): Promise
     include: { deviceModel: { include: { connectors: true } } },
   });
   return getOrCreateEntry(instance).session;
+}
+
+const globalForReconcile = globalThis as unknown as {
+  deviceInstanceRuntimeReconciled: boolean | undefined;
+};
+
+/**
+ * Re-establishes OCPP connections for every instance whose persisted `status` was `CONNECTED` or
+ * `CONNECTING` when this process last stopped. A real charger reconnects to its configured CSMS
+ * on power-up without user action, but `registry` above is purely in-memory (by design, for dev
+ * hot-reload survival) — so on a genuine process restart nothing reconnects on its own, and
+ * `DeviceInstance.status` is left stale ("CONNECTED" in the DB while actually disconnected) until
+ * a user manually restarts the instance. Call once per process (e.g. from the device-instances
+ * list route, hit on app load); guarded to actually run only once, and safe to call more than
+ * once regardless (`startDeviceInstance` is itself idempotent per instance).
+ */
+export async function reconcileRuntimeOnStartup(): Promise<void> {
+  if (globalForReconcile.deviceInstanceRuntimeReconciled) return;
+  globalForReconcile.deviceInstanceRuntimeReconciled = true;
+
+  const stale = await prisma.deviceInstance.findMany({
+    where: { status: { in: [DeviceConnectionStatus.CONNECTED, DeviceConnectionStatus.CONNECTING] } },
+    select: { id: true },
+  });
+
+  for (const { id } of stale) {
+    try {
+      await startDeviceInstance(id);
+    } catch (err) {
+      console.error(`Failed to reconnect device instance ${id} on startup:`, err);
+    }
+  }
 }

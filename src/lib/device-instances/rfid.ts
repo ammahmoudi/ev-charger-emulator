@@ -1,15 +1,20 @@
 import { adoptRemoteSession, startChargingSession, type ConnectorRuntimeView } from "@/lib/device-instances/connector-sessions";
+import { lookupLocalAuthEntry } from "@/lib/device-instances/local-auth";
 import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
 import { prisma } from "@/lib/prisma";
 
 export class RfidError extends Error {}
 
 /**
- * Presents an RFID card to a connector, mirroring the real device's card-reader flow. Two paths:
+ * Presents an RFID card to a connector, mirroring the real device's card-reader flow. Three paths:
  *
  * - The instance's **master card** (`DeviceInstance.masterCardIdTag`) always works locally,
  *   regardless of CSMS connection — delegates straight to `startChargingSession`'s existing
  *   Preparing→Charging local simulation, unchanged from before this feature existed.
+ * - An idTag present (and `ACCEPTED`, unexpired) in the instance's **local authorization
+ *   list/cache** (`local-auth.ts`) also authorizes locally, the same way a real charger's
+ *   `SendLocalList`-populated table or cached `Authorize` response lets it authorize a known
+ *   card without a live CSMS round-trip — including while offline.
  * - Any other idTag requires the instance to be `CONNECTED` and sends a real client-initiated
  *   `Authorize` then `StartTransaction` over the live OCPP connection — a genuine charge-point
  *   card swipe, distinct from the CSMS-initiated `RemoteStartTransaction` handler. On success,
@@ -31,9 +36,14 @@ export async function presentRfidCard(
     return startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
   }
 
+  const localEntry = await lookupLocalAuthEntry(deviceInstanceId, idTag);
+  if (localEntry) {
+    return startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
+  }
+
   if (getRuntimeConnectionState(deviceInstanceId) !== "connected") {
     throw new RfidError(
-      "This isn't the master card, and the instance isn't connected to a CSMS to authorize it — start the instance's OCPP connection first, or present the master card.",
+      "This card isn't the master card or in the local authorization list, and the instance isn't connected to a CSMS to authorize it — start the instance's OCPP connection first, add the card to the local list, or present the master card.",
     );
   }
 
