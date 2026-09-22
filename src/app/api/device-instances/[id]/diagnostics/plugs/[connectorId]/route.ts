@@ -24,7 +24,7 @@ async function assertConnectorBelongsToInstance(instanceId: string, connectorId:
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string; connectorId: string }> }) {
   const { id, connectorId } = await params;
   if (!(await assertConnectorBelongsToInstance(id, connectorId))) return notFound("Connector not found on this instance");
-  return NextResponse.json({ interfaceBoard: getInterfaceBoardReading(id, connectorId) });
+  return NextResponse.json({ interfaceBoard: await getInterfaceBoardReading(id, connectorId) });
 }
 
 interface PatchBody {
@@ -53,7 +53,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.value !== "normal" && body.value !== "abnormal") {
       return badRequest('value must be "normal" or "abnormal"', "value");
     }
-    const interfaceBoard = setInterfaceBoardToggleField(id, connectorId, body.field as InterfaceBoardToggleField, body.value);
+    const interfaceBoard = await setInterfaceBoardToggleField(id, connectorId, body.field as InterfaceBoardToggleField, body.value);
     return NextResponse.json({ interfaceBoard });
   }
 
@@ -61,7 +61,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.value !== "open" && body.value !== "closed") {
       return badRequest('value must be "open" or "closed"', "value");
     }
-    const interfaceBoard = setContactorField(id, connectorId, body.field as ContactorField, body.value);
+    const interfaceBoard = await setContactorField(id, connectorId, body.field as ContactorField, body.value);
     return NextResponse.json({ interfaceBoard });
   }
 

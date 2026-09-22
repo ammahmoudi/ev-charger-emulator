@@ -1,3 +1,6 @@
+import { orderModelConnectors } from "@/lib/device-instances/connectors";
+import { prisma } from "@/lib/prisma";
+
 /**
  * Simulated per-instance status/diagnostics state (issue #4), kept in-memory alongside the
  * persisted DeviceInstance — not Prisma-backed, per the issue's acceptance criteria. Every
@@ -7,7 +10,12 @@
  *
  * Numeric readouts (temperatures, voltages, currents, error codes) are not persisted values —
  * they're recomputed with small jitter around a baseline on every read, so the screens show
- * "live" telemetry instead of frozen constants, without needing a polling/tick loop.
+ * "live" telemetry instead of frozen constants, without needing a polling/tick loop. Two
+ * exceptions derive from real persisted data instead of a fixed/random baseline: a plug's output
+ * current comes from its connector's actual active charging session
+ * (`connector-sessions.ts`/`DeviceInstanceConnectorState`), and its lifetime `energyTotal` comes
+ * from summing its completed `DeviceInstanceSession` rows — see `getPlugOutputCurrent` and
+ * `getInterfaceBoardReading`.
  */
 
 export type HealthStatus = "normal" | "abnormal";
@@ -90,8 +98,10 @@ interface DeviceDiagnosticState {
   overall: OverallHealth;
   plugs: Map<string, InterfaceBoardReading>;
   modules: HealthStatus[];
-  plugOutputCurrentBaseline: Map<string, number>;
 }
+
+/** Nominal DC bus voltage assumed when deriving a plausible output current from a charge rate (kW). */
+const NOMINAL_DC_VOLTAGE = 400;
 
 function createDefaultOverallHealth(): OverallHealth {
   return {
@@ -147,7 +157,6 @@ function getOrCreateState(instanceId: string): DeviceDiagnosticState {
       overall: createDefaultOverallHealth(),
       plugs: new Map(),
       modules: Array.from({ length: COMMUNICATION_MODULE_COUNT }, () => "normal"),
-      plugOutputCurrentBaseline: new Map(),
     };
     registry.set(instanceId, state);
   }
@@ -183,24 +192,64 @@ export function setOverallHealthField(instanceId: string, field: OverallHealthFi
   return { ...state.overall };
 }
 
-/** Returns a plug's interface-board reading with numeric fields jittered around baseline (comm/health fields are exactly as toggled). */
-export function getInterfaceBoardReading(instanceId: string, connectorId: string): InterfaceBoardReading {
-  const plug = getOrCreatePlug(getOrCreateState(instanceId), connectorId);
+/**
+ * Maps a plug's `DeviceModelConnector.id` (the string id the diagnostics API routes key
+ * readings by) to the flat, sequential OCPP `connectorId` (1-based) that
+ * `DeviceInstanceConnectorState`/`DeviceInstanceSession` are keyed by elsewhere in the app (see
+ * `connectors.ts::orderModelConnectors`). Returns `null` if the instance or connector doesn't
+ * exist (e.g. a not-yet-persisted instance in a unit test) — callers fall back to defaults.
+ */
+async function resolveNumericConnectorId(instanceId: string, connectorId: string): Promise<number | null> {
+  const instance = await prisma.deviceInstance.findUnique({
+    where: { id: instanceId },
+    select: { deviceModel: { select: { connectors: true } } },
+  });
+  if (!instance) return null;
+  const connector = orderModelConnectors(instance.deviceModel.connectors).find((c) => c.id === connectorId);
+  return connector?.connectorId ?? null;
+}
+
+/**
+ * A plug's lifetime energy counter: `energyTotal` isn't a hardcoded constant, it's the factory
+ * baseline (a plug ships having already delivered some energy during production testing) plus
+ * every completed `DeviceInstanceSession`'s energy for that connector — so it actually
+ * accumulates as sessions run, like the real device's Setting-screen counter does.
+ */
+async function computeEnergyTotal(instanceId: string, connectorId: string, baselineKwh: number): Promise<number> {
+  const numericConnectorId = await resolveNumericConnectorId(instanceId, connectorId);
+  if (numericConnectorId == null) return baselineKwh;
+
+  const { _sum } = await prisma.deviceInstanceSession.aggregate({
+    where: { deviceInstanceId: instanceId, connectorId: numericConnectorId },
+    _sum: { energyWh: true },
+  });
+  const sessionsKwh = (_sum.energyWh ?? 0) / 1000;
+  return Number((baselineKwh + sessionsKwh).toFixed(3));
+}
+
+async function renderInterfaceBoard(instanceId: string, connectorId: string, plug: InterfaceBoardReading): Promise<InterfaceBoardReading> {
   return {
     ...plug,
     adSamplingVoltage: plug.adSamplingVoltage === 0 && plug.seccCommunication === "normal" ? 0 : jitter(plug.adSamplingVoltage, 0.3),
     temperatureSampling1: jitter(plug.temperatureSampling1, 1, 0),
     temperatureSampling2: jitter(plug.temperatureSampling2, 1, 0),
     ccVoltage: jitter(plug.ccVoltage, 0.05, 2),
+    energyTotal: await computeEnergyTotal(instanceId, connectorId, plug.energyTotal),
   };
 }
 
-export function setInterfaceBoardToggleField(
+/** Returns a plug's interface-board reading with numeric fields jittered around baseline (comm/health fields are exactly as toggled). */
+export async function getInterfaceBoardReading(instanceId: string, connectorId: string): Promise<InterfaceBoardReading> {
+  const plug = getOrCreatePlug(getOrCreateState(instanceId), connectorId);
+  return renderInterfaceBoard(instanceId, connectorId, plug);
+}
+
+export async function setInterfaceBoardToggleField(
   instanceId: string,
   connectorId: string,
   field: InterfaceBoardToggleField,
   value: HealthStatus,
-): InterfaceBoardReading {
+): Promise<InterfaceBoardReading> {
   const state = getOrCreateState(instanceId);
   const plug = getOrCreatePlug(state, connectorId);
   plug[field] = value;
@@ -208,14 +257,19 @@ export function setInterfaceBoardToggleField(
   // mirroring the real device where a nonzero code accompanies the abnormal comm flag.
   if (field === "interfaceBoardCommunication") plug.plcErrorCode = value === "abnormal" ? "0x11" : "0x00";
   if (field === "seccCommunication") plug.evErrorCode = value === "abnormal" ? 1 : 0;
-  return { ...plug };
+  return renderInterfaceBoard(instanceId, connectorId, plug);
 }
 
-export function setContactorField(instanceId: string, connectorId: string, field: ContactorField, value: ContactStatus): InterfaceBoardReading {
+export async function setContactorField(
+  instanceId: string,
+  connectorId: string,
+  field: ContactorField,
+  value: ContactStatus,
+): Promise<InterfaceBoardReading> {
   const state = getOrCreateState(instanceId);
   const plug = getOrCreatePlug(state, connectorId);
   plug[field] = value;
-  return { ...plug };
+  return renderInterfaceBoard(instanceId, connectorId, plug);
 }
 
 export function getCommunicationModules(instanceId: string): CommunicationModule[] {
@@ -236,13 +290,22 @@ export function setCommunicationModuleField(instanceId: string, moduleIndex: num
   return getCommunicationModules(instanceId);
 }
 
-/** Simulated per-plug output current (A) shown at the bottom of the communication screen. */
-export function getPlugOutputCurrent(instanceId: string, connectorId: string): number {
-  const state = getOrCreateState(instanceId);
-  let baseline = state.plugOutputCurrentBaseline.get(connectorId);
-  if (baseline === undefined) {
-    baseline = 0;
-    state.plugOutputCurrentBaseline.set(connectorId, baseline);
-  }
-  return baseline === 0 ? 0 : jitter(baseline, 0.5);
+/**
+ * Simulated per-plug output current (A) shown at the bottom of the communication screen —
+ * derived from the connector's actual active charging session (`DeviceInstanceConnectorState`),
+ * not a fixed baseline: zero while `Available`/`Preparing`/idle, and a plausible current
+ * (session's charge rate over a nominal DC bus voltage) while `Charging`, jittered like the
+ * rest of this module's "live" readouts.
+ */
+export async function getPlugOutputCurrent(instanceId: string, connectorId: string): Promise<number> {
+  const numericConnectorId = await resolveNumericConnectorId(instanceId, connectorId);
+  if (numericConnectorId == null) return 0;
+
+  const connectorState = await prisma.deviceInstanceConnectorState.findUnique({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: numericConnectorId } },
+  });
+  if (connectorState?.status !== "Charging" || !connectorState.activeChargeRateKw) return 0;
+
+  const baseline = (connectorState.activeChargeRateKw * 1000) / NOMINAL_DC_VOLTAGE;
+  return jitter(baseline, 0.5);
 }

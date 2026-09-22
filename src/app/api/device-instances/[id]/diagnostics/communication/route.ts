@@ -20,7 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const connectorIds = new URL(request.url).searchParams.getAll("connectorId");
   const plugOutputCurrents: Record<string, number> = {};
   for (const connectorId of connectorIds) {
-    plugOutputCurrents[connectorId] = getPlugOutputCurrent(id, connectorId);
+    plugOutputCurrents[connectorId] = await getPlugOutputCurrent(id, connectorId);
   }
 
   return NextResponse.json({ modules: getCommunicationModules(id), plugOutputCurrents });
