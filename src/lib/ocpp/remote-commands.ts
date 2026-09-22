@@ -64,12 +64,15 @@ export function registerRemoteCommandHandlers(
   const resetReconnectDelayMs = deps.resetReconnectDelayMs ?? DEFAULT_RESET_RECONNECT_DELAY_MS;
   const diagnosticsUploadDelayMs = deps.diagnosticsUploadDelayMs ?? DEFAULT_DIAGNOSTICS_UPLOAD_DELAY_MS;
   const simulatedChargeRateKwFallback = deps.simulatedChargeRateKw ?? DEFAULT_SIMULATED_CHARGE_RATE_KW;
+  const finishingHoldMs = deps.finishingHoldMs ?? 0;
   const onError = deps.onError ?? (() => {});
 
   const activeTransactions = new Map<number, OcppActiveTransaction>();
   /** Per-connector cumulative energy register (Wh), persisted across transactions for this process's lifetime. */
   const meterRegisterWh = new Map<number, number>();
   const transactionSimState = new Map<number, TransactionSimState>();
+  /** Timers for the delayed Finishing->Available flip (see `finishingHoldMs`), so `dispose()` can cancel them. */
+  const pendingFinishingTimers = new Set<ReturnType<typeof setTimeout>>();
 
   const reservationHandlers = createReservationHandlers(session, deps.reservationStore);
   const chargingProfileHandlers = createChargingProfileHandlers(
@@ -442,7 +445,18 @@ export function registerRemoteCommandHandlers(
     }
 
     session.setConnectorStatus(entry.connectorId, "Finishing");
-    session.setConnectorStatus(entry.connectorId, "Available");
+    // Only the local status flip is delayed — the StopTransaction call above already happened
+    // immediately, and the mirroring hook below fires right away too (the persisted side, if
+    // any, manages its own Finishing hold independently — see AUDIT-integration.md).
+    if (finishingHoldMs > 0) {
+      const timer = setTimeout(() => {
+        pendingFinishingTimers.delete(timer);
+        session.setConnectorStatus(entry.connectorId, "Available");
+      }, finishingHoldMs);
+      pendingFinishingTimers.add(timer);
+    } else {
+      session.setConnectorStatus(entry.connectorId, "Available");
+    }
 
     if (deps.onRemoteTransactionStopped) {
       try {
@@ -704,6 +718,8 @@ export function registerRemoteCommandHandlers(
       for (const connectorId of transactionSimState.keys()) {
         stopMeterValuesLoop(connectorId);
       }
+      for (const timer of pendingFinishingTimers) clearTimeout(timer);
+      pendingFinishingTimers.clear();
       reservationHandlers.dispose();
       firmwareHandlers.dispose();
     },

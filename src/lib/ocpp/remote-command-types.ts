@@ -153,6 +153,16 @@ export interface RemoteCommandHandlersDeps {
   dataTransferHandlers?: Record<string, OcppDataTransferHandler>;
   /** Called when a fire-and-forget follow-up action (e.g. sending `StartTransaction`) fails. */
   onError?: (error: Error) => void;
+  /**
+   * How long to hold a connector in `Finishing` after a remote stop before flipping it to
+   * `Available`, in ms. Default: 0 (today's instant flip, for backward compatibility). Only the
+   * *local* `OcppChargePointSession` status flip is delayed — the `StopTransaction` call to the
+   * CSMS always happens immediately. Set this to match `device-instances/connector-sessions.ts`'s
+   * own persisted `Finishing` hold duration so the in-memory session (dashboard) and the
+   * Prisma-persisted state (Home/Cost screens) agree for the duration of the hold — see
+   * AUDIT-integration.md's "Timing mismatch during the stop sequence".
+   */
+  finishingHoldMs?: number;
   /** Backing store for `ReserveNow`/`CancelReservation`. Default: a small in-memory store. */
   reservationStore?: OcppReservationStore;
   /** Backing store for `SetChargingProfile`/`ClearChargingProfile`. Default: a small in-memory store. */

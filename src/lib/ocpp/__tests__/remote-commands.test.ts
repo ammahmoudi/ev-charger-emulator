@@ -309,6 +309,98 @@ describe("registerRemoteCommandHandlers", () => {
     });
   });
 
+  describe("finishingHoldMs", () => {
+    it("keeps the connector in Finishing for finishingHoldMs before flipping to Available", async () => {
+      const holdClient = new OcppClient({ url: server.url, reconnect: { enabled: false } });
+      const holdSession = new OcppChargePointSession(holdClient, { identity: IDENTITY, connectors: CONNECTORS });
+      holdSession.on("error", () => {});
+      const holdController = registerRemoteCommandHandlers(holdClient, holdSession, { finishingHoldMs: 60 });
+
+      holdClient.connect();
+      const holdSocket = await server.waitForNextConnection();
+      const holdQueue = createMessageQueue(holdSocket);
+
+      const [, bootMessageId] = await holdQueue.next();
+      holdSocket.send(JSON.stringify([3, bootMessageId, { status: "Accepted", interval: 300 }]));
+      await holdQueue.next();
+      await holdQueue.next();
+
+      holdSocket.send(JSON.stringify([2, "hold-start-1", "RemoteStartTransaction", { connectorId: 1, idTag: "TAG1" }]));
+      const startFrames = [await holdQueue.next(), await holdQueue.next(), await holdQueue.next()];
+      const startTxCall = findByAction(startFrames, "StartTransaction") as [number, string, string, Record<string, unknown>];
+      holdSocket.send(JSON.stringify([3, startTxCall[1], { transactionId: 60, idTagInfo: { status: "Accepted" } }]));
+      await holdQueue.next(); // Charging StatusNotification
+
+      holdSocket.send(JSON.stringify([2, "hold-stop-1", "RemoteStopTransaction", { transactionId: 60 }]));
+      const stopFrames = [await holdQueue.next(), await holdQueue.next()];
+      const stopTxCall = findByAction(stopFrames, "StopTransaction") as [number, string, string, Record<string, unknown>];
+      holdSocket.send(JSON.stringify([3, stopTxCall[1], {}]));
+
+      const [, , finishingAction, finishingPayload] = await holdQueue.next();
+      expect(finishingAction).toBe("StatusNotification");
+      expect(finishingPayload).toMatchObject({ status: "Finishing" });
+      expect(holdSession.getConnectorStatus(1)).toMatchObject({ status: "Finishing" });
+
+      // Still well within the hold — the connector must not have flipped to Available yet.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(holdSession.getConnectorStatus(1)).toMatchObject({ status: "Finishing" });
+
+      const [, , availableAction, availablePayload] = await holdQueue.next();
+      expect(availableAction).toBe("StatusNotification");
+      expect(availablePayload).toMatchObject({ status: "Available" });
+      expect(holdSession.getConnectorStatus(1)).toMatchObject({ status: "Available" });
+
+      holdController.dispose();
+      holdSession.dispose();
+      holdClient.disconnect();
+    });
+
+    it("still fires onRemoteTransactionStopped immediately, not delayed by finishingHoldMs", async () => {
+      const onRemoteTransactionStopped = vi.fn();
+      const holdClient = new OcppClient({ url: server.url, reconnect: { enabled: false } });
+      const holdSession = new OcppChargePointSession(holdClient, { identity: IDENTITY, connectors: CONNECTORS });
+      holdSession.on("error", () => {});
+      const holdController = registerRemoteCommandHandlers(holdClient, holdSession, {
+        finishingHoldMs: 500,
+        onRemoteTransactionStopped,
+      });
+
+      holdClient.connect();
+      const holdSocket = await server.waitForNextConnection();
+      const holdQueue = createMessageQueue(holdSocket);
+
+      const [, bootMessageId] = await holdQueue.next();
+      holdSocket.send(JSON.stringify([3, bootMessageId, { status: "Accepted", interval: 300 }]));
+      await holdQueue.next();
+      await holdQueue.next();
+
+      holdSocket.send(JSON.stringify([2, "hold-start-2", "RemoteStartTransaction", { connectorId: 1, idTag: "TAG1" }]));
+      const startFrames = [await holdQueue.next(), await holdQueue.next(), await holdQueue.next()];
+      const startTxCall = findByAction(startFrames, "StartTransaction") as [number, string, string, Record<string, unknown>];
+      holdSocket.send(JSON.stringify([3, startTxCall[1], { transactionId: 61, idTagInfo: { status: "Accepted" } }]));
+      await holdQueue.next(); // Charging StatusNotification
+
+      holdSocket.send(JSON.stringify([2, "hold-stop-2", "RemoteStopTransaction", { transactionId: 61 }]));
+      const stopFrames = [await holdQueue.next(), await holdQueue.next()];
+      const stopTxCall = findByAction(stopFrames, "StopTransaction") as [number, string, string, Record<string, unknown>];
+      holdSocket.send(JSON.stringify([3, stopTxCall[1], {}]));
+      await holdQueue.next(); // Finishing StatusNotification
+
+      // The hook has already fired here, well before the 500ms hold elapses.
+      expect(onRemoteTransactionStopped).toHaveBeenCalledTimes(1);
+      expect(onRemoteTransactionStopped).toHaveBeenCalledWith(1, {
+        transactionId: 61,
+        reason: "Remote",
+        meterStopWh: expect.any(Number),
+      });
+      expect(holdSession.getConnectorStatus(1)).toMatchObject({ status: "Finishing" });
+
+      holdController.dispose();
+      holdSession.dispose();
+      holdClient.disconnect();
+    });
+  });
+
   describe("UnlockConnector", () => {
     it("reports Unlocked for a known connector", async () => {
       sendCall("UnlockConnector", { connectorId: 2 }, "unlock-1");
