@@ -422,7 +422,24 @@ async function getFeeRateParams(
 export async function stopChargingSession(
   deviceInstanceId: string,
   connectorId: number,
-  options: { stopCause: string },
+  options: {
+    stopCause: string;
+    /**
+     * Set when the caller (`src/lib/ocpp/remote-commands.ts`, via
+     * `onRemoteTransactionStopped`) already sent this session's `StopTransaction` to the CSMS
+     * itself — skips this function's own CSMS notification so a CSMS-initiated
+     * `RemoteStopTransaction` doesn't result in the same transaction's stop being reported
+     * twice. See AUDIT-integration.md.
+     */
+    skipCsmsNotify?: boolean;
+    /**
+     * The real final energy register (Wh) already reported to the CSMS for this transaction,
+     * when known (same source as `skipCsmsNotify`) — used instead of this function's own
+     * elapsed-time simulation so the persisted session/cost the Home/Cost screens show matches
+     * what the CSMS actually recorded, rather than two independent simulations drifting apart.
+     */
+    energyWhOverride?: number;
+  },
 ): Promise<StopSessionResult> {
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
@@ -435,7 +452,8 @@ export async function stopChargingSession(
   const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
   const stoppedAt = new Date();
   const energyWh =
-    state.status === "Charging" ? currentEnergyWh(state.activeChargeRateKw, state.activeStartedAt, stoppedAt) : 0;
+    options.energyWhOverride ??
+    (state.status === "Charging" ? currentEnergyWh(state.activeChargeRateKw, state.activeStartedAt, stoppedAt) : 0);
   const { pricePerKwh, currency, serviceFeePerSession } = await getFeeRateParams(deviceInstanceId);
   const cost = energyWh > 0 ? round2((energyWh / WH_PER_KWH) * pricePerKwh + serviceFeePerSession) : 0;
   const isFault = isFaultStopCause(options.stopCause);
@@ -444,7 +462,7 @@ export async function stopChargingSession(
   // because a fault is an abrupt stop, not a graceful wind-down.
   const goesThroughFinishing = state.activeTransactionId != null && !isFault;
 
-  if (state.activeIsRemote && state.activeTransactionId != null) {
+  if (state.activeIsRemote && state.activeTransactionId != null && !options.skipCsmsNotify) {
     const stopTransactionPayload = {
       transactionId: state.activeTransactionId,
       meterStop: Math.round(energyWh),

@@ -274,6 +274,22 @@ export function registerRemoteCommandHandlers(
       });
       session.setConnectorStatus(connectorId, "Charging");
       await startMeterValuesLoop(connectorId);
+
+      if (deps.onRemoteTransactionStarted) {
+        const sim = transactionSimState.get(connectorId);
+        const tx = activeTransactions.get(connectorId);
+        if (sim && tx) {
+          try {
+            await deps.onRemoteTransactionStarted(connectorId, {
+              idTag,
+              transactionId: tx.transactionId,
+              chargeRateKw: sim.chargeRateKw,
+            });
+          } catch (err) {
+            onError(toError(err));
+          }
+        }
+      }
     } catch (err) {
       session.setConnectorStatus(connectorId, "Available");
       onError(toError(err));
@@ -338,6 +354,18 @@ export function registerRemoteCommandHandlers(
     }
     session.setConnectorStatus(entry.connectorId, "Finishing");
     session.setConnectorStatus(entry.connectorId, "Available");
+
+    if (deps.onRemoteTransactionStopped) {
+      try {
+        await deps.onRemoteTransactionStopped(entry.connectorId, {
+          transactionId: entry.transactionId,
+          reason,
+          meterStopWh,
+        });
+      } catch (err) {
+        onError(toError(err));
+      }
+    }
   }
 
   function handleRemoteStopTransaction(payload: Record<string, unknown>): { status: "Accepted" | "Rejected" } {

@@ -1,5 +1,6 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
+import { adoptRemoteSession, stopChargingSession } from "@/lib/device-instances/connector-sessions";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { drainOutbox } from "@/lib/device-instances/outbox";
 import { PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
@@ -75,6 +76,21 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
     onError: (err) => {
       if (entry.manuallyStopped) return;
       void writeStatus(instance.id, { statusReason: err.message });
+    },
+    // Mirror a CSMS-initiated RemoteStartTransaction/RemoteStopTransaction into this instance's
+    // Prisma-persisted connector state, the same state `connector-sessions.ts` drives for
+    // locally-simulated sessions — otherwise the Home/Cost/Lock/Maintenance screens (which all
+    // read that persisted state) never show a remote-started session at all. See
+    // AUDIT-integration.md for why this lives here (the DI boundary) rather than in `src/lib/ocpp`.
+    onRemoteTransactionStarted: async (connectorId, info) => {
+      await adoptRemoteSession(instance.id, connectorId, info);
+    },
+    onRemoteTransactionStopped: async (connectorId, info) => {
+      await stopChargingSession(instance.id, connectorId, {
+        stopCause: info.reason === "Remote" ? "Remote Stop" : info.reason,
+        skipCsmsNotify: true,
+        energyWhOverride: info.meterStopWh,
+      });
     },
   });
 

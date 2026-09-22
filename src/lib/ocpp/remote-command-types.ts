@@ -105,6 +105,32 @@ export interface RemoteCommandHandlersDeps {
   dataTransferHandlers?: Record<string, OcppDataTransferHandler>;
   /** Called when a fire-and-forget follow-up action (e.g. sending `StartTransaction`) fails. */
   onError?: (error: Error) => void;
+  /**
+   * Called once a CSMS-initiated `RemoteStartTransaction` has actually started (the real
+   * `StartTransaction.conf` came back `Accepted`) — lets a caller (e.g.
+   * `device-instances/runtime.ts`) mirror it into its own persisted connector state
+   * (`connector-sessions.ts`'s `adoptRemoteSession`), so screens that read that persisted state
+   * (Home/Cost/Lock/Maintenance) reflect a remote-started session instead of only the in-memory
+   * `OcppChargePointSession` status the dashboard reads. Deliberately kept as an injected
+   * callback rather than an import so `src/lib/ocpp` stays independent of `device-instances`'
+   * Prisma-backed persistence — see AUDIT-integration.md. Thrown/rejected errors are caught and
+   * passed to `onError`, not rethrown.
+   */
+  onRemoteTransactionStarted?: (
+    connectorId: number,
+    info: { idTag: string; transactionId: number; chargeRateKw: number },
+  ) => void | Promise<void>;
+  /**
+   * Called once a remote-tracked transaction has actually stopped (via `RemoteStopTransaction`
+   * or a `Reset`) and its `StopTransaction` has already been sent to the CSMS — the counterpart
+   * to {@link onRemoteTransactionStarted}. `meterStopWh` is this module's own simulated final
+   * energy register, passed through so the mirrored persisted session records the same energy
+   * figure that was actually reported to the CSMS rather than an independently-simulated one.
+   */
+  onRemoteTransactionStopped?: (
+    connectorId: number,
+    info: { transactionId: number; reason: string; meterStopWh: number },
+  ) => void | Promise<void>;
 }
 
 /** Handle returned by {@link registerRemoteCommandHandlers} for introspection and teardown. */

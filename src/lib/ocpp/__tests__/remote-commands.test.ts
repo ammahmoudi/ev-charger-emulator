@@ -209,6 +209,106 @@ describe("registerRemoteCommandHandlers", () => {
     });
   });
 
+  // A separate connection (rather than the shared `client`/`session`/`controller` from
+  // `beforeEach`, which are created without these deps) so each test can inject its own
+  // `onRemoteTransactionStarted`/`onRemoteTransactionStopped` spies. See
+  // AUDIT-integration.md and `remote-command-types.ts` for why these hooks exist: mirroring a
+  // CSMS-initiated transaction into `device-instances`' Prisma-persisted connector state, which
+  // this protocol-only module must never import directly.
+  describe("onRemoteTransactionStarted / onRemoteTransactionStopped hooks", () => {
+    it("fires the start hook once StartTransaction.conf comes back Accepted, and the stop hook once StopTransaction.conf comes back", async () => {
+      const onRemoteTransactionStarted = vi.fn();
+      const onRemoteTransactionStopped = vi.fn();
+      const hookClient = new OcppClient({ url: server.url, reconnect: { enabled: false } });
+      const hookSession = new OcppChargePointSession(hookClient, { identity: IDENTITY, connectors: CONNECTORS });
+      hookSession.on("error", () => {});
+      const hookController = registerRemoteCommandHandlers(hookClient, hookSession, {
+        onRemoteTransactionStarted,
+        onRemoteTransactionStopped,
+      });
+
+      hookClient.connect();
+      const hookSocket = await server.waitForNextConnection();
+      const hookQueue = createMessageQueue(hookSocket);
+
+      const [, bootMessageId] = await hookQueue.next();
+      hookSocket.send(JSON.stringify([3, bootMessageId, { status: "Accepted", interval: 300 }]));
+      await hookQueue.next();
+      await hookQueue.next();
+
+      hookSocket.send(
+        JSON.stringify([2, "hook-start-1", "RemoteStartTransaction", { connectorId: 1, idTag: "TAG1" }]),
+      );
+      const startFrames = [await hookQueue.next(), await hookQueue.next(), await hookQueue.next()];
+      expect(onRemoteTransactionStarted).not.toHaveBeenCalled();
+      const startTxCall = findByAction(startFrames, "StartTransaction") as [number, string, string, Record<string, unknown>];
+      hookSocket.send(JSON.stringify([3, startTxCall[1], { transactionId: 55, idTagInfo: { status: "Accepted" } }]));
+      await hookQueue.next(); // Charging StatusNotification
+
+      expect(onRemoteTransactionStarted).toHaveBeenCalledTimes(1);
+      expect(onRemoteTransactionStarted).toHaveBeenCalledWith(1, {
+        idTag: "TAG1",
+        transactionId: 55,
+        chargeRateKw: 30,
+      });
+
+      hookSocket.send(JSON.stringify([2, "hook-stop-1", "RemoteStopTransaction", { transactionId: 55 }]));
+      const stopFrames = [await hookQueue.next(), await hookQueue.next()];
+      const stopTxCall = findByAction(stopFrames, "StopTransaction") as [number, string, string, Record<string, unknown>];
+      hookSocket.send(JSON.stringify([3, stopTxCall[1], {}]));
+      await hookQueue.next(); // Finishing StatusNotification
+      await hookQueue.next(); // Available StatusNotification
+
+      expect(onRemoteTransactionStopped).toHaveBeenCalledTimes(1);
+      expect(onRemoteTransactionStopped).toHaveBeenCalledWith(1, {
+        transactionId: 55,
+        reason: "Remote",
+        meterStopWh: expect.any(Number),
+      });
+
+      hookController.dispose();
+      hookSession.dispose();
+      hookClient.disconnect();
+    });
+
+    it("still transitions the connector even when the start hook itself throws, and reports the error via onError", async () => {
+      const onError = vi.fn();
+      const hookClient = new OcppClient({ url: server.url, reconnect: { enabled: false } });
+      const hookSession = new OcppChargePointSession(hookClient, { identity: IDENTITY, connectors: CONNECTORS });
+      hookSession.on("error", () => {});
+      const hookController = registerRemoteCommandHandlers(hookClient, hookSession, {
+        onError,
+        onRemoteTransactionStarted: () => {
+          throw new Error("mirror failed");
+        },
+      });
+
+      hookClient.connect();
+      const hookSocket = await server.waitForNextConnection();
+      const hookQueue = createMessageQueue(hookSocket);
+
+      const [, bootMessageId] = await hookQueue.next();
+      hookSocket.send(JSON.stringify([3, bootMessageId, { status: "Accepted", interval: 300 }]));
+      await hookQueue.next();
+      await hookQueue.next();
+
+      hookSocket.send(
+        JSON.stringify([2, "hook-start-err", "RemoteStartTransaction", { connectorId: 1, idTag: "TAG1" }]),
+      );
+      const startFrames = [await hookQueue.next(), await hookQueue.next(), await hookQueue.next()];
+      const startTxCall = findByAction(startFrames, "StartTransaction") as [number, string, string, Record<string, unknown>];
+      hookSocket.send(JSON.stringify([3, startTxCall[1], { transactionId: 56, idTagInfo: { status: "Accepted" } }]));
+      await hookQueue.next(); // Charging StatusNotification still goes out despite the hook throwing
+
+      expect(hookSession.getConnectorStatus(1)).toMatchObject({ status: "Charging" });
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "mirror failed" }));
+
+      hookController.dispose();
+      hookSession.dispose();
+      hookClient.disconnect();
+    });
+  });
+
   describe("UnlockConnector", () => {
     it("reports Unlocked for a known connector", async () => {
       sendCall("UnlockConnector", { connectorId: 2 }, "unlock-1");

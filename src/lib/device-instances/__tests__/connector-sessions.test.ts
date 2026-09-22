@@ -124,4 +124,24 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     expect(queued[0].action).toBe("StopTransaction");
     expect((queued[0].payload as Record<string, unknown>).transactionId).toBe(42);
   });
+
+  // `skipCsmsNotify`/`energyWhOverride` back `src/lib/ocpp/remote-commands.ts`'s
+  // `onRemoteTransactionStopped` hook (see AUDIT-integration.md and `runtime.ts`): that module
+  // already sent the real `StopTransaction` to the CSMS itself before mirroring the stop here,
+  // so this function must not send a second one, and should record the same energy figure the
+  // CSMS actually saw rather than re-deriving its own from elapsed time.
+  it("skipCsmsNotify avoids queuing a second StopTransaction, and energyWhOverride is recorded as-is", async () => {
+    await setup();
+    await adoptRemoteSession(instanceId, 1, { idTag: "CARD-9", transactionId: 43, chargeRateKw: 10 });
+
+    const result = await stopChargingSession(instanceId, 1, {
+      stopCause: "Remote Stop",
+      skipCsmsNotify: true,
+      energyWhOverride: 1234,
+    });
+
+    expect(result.energyKwh).toBeCloseTo(1.234, 3);
+    const queued = await prisma.deviceInstanceOutboxMessage.findMany({ where: { deviceInstanceId: instanceId } });
+    expect(queued).toHaveLength(0);
+  });
 });
