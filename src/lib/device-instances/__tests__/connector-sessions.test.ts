@@ -7,6 +7,7 @@ import {
   startChargingSession,
   stopChargingSession,
 } from "../connector-sessions";
+import { orderModelConnectors } from "../connectors";
 import { startChargingTest, stopChargingTest } from "../hardware-test-state";
 import { getInstanceConnectorStatuses } from "../runtime";
 import { createTestModelAndInstance, deleteTestDeviceModel, type TestDeviceModel } from "./test-helpers";
@@ -170,5 +171,27 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     await expect(
       adoptRemoteSession(instanceId, 1, { idTag: "CARD-9", transactionId: 99, chargeRateKw: 10 }),
     ).rejects.toThrow(/hardware output test/);
+  });
+
+  // AUDIT-state.md's round-2 addendum: the hot-polled path (startChargingSession/
+  // stopChargingSession/setConnectorLock/clearConnectorFault) now fetches the connector topology
+  // once and threads it through rather than each independently re-fetching it — listConnectorStates
+  // accepts an optional preloaded connectors list for this. Verify passing one produces the exact
+  // same result as the default (self-fetching) path.
+  it("listConnectorStates with a preloaded connector list matches the default self-fetching path", async () => {
+    await setup();
+    await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+
+    const instance = await prisma.deviceInstance.findUniqueOrThrow({
+      where: { id: instanceId },
+      include: { deviceModel: { include: { connectors: true } } },
+    });
+    const preloaded = orderModelConnectors(instance.deviceModel.connectors);
+
+    const [withPreload, withoutPreload] = await Promise.all([
+      listConnectorStates(instanceId, preloaded),
+      listConnectorStates(instanceId),
+    ]);
+    expect(withPreload).toEqual(withoutPreload);
   });
 });
