@@ -3,7 +3,10 @@ import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type Dev
 import { adoptRemoteSession, stopChargingSession } from "@/lib/device-instances/connector-sessions";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { drainOutbox } from "@/lib/device-instances/outbox";
+import { PrismaChargingProfileStore } from "@/lib/device-instances/prisma-charging-profile-store";
 import { PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
+import { PrismaLocalAuthListStore } from "@/lib/device-instances/prisma-local-auth-list-store";
+import { PrismaReservationStore } from "@/lib/device-instances/prisma-reservation-store";
 import {
   OcppChargePointSession,
   OcppClient,
@@ -73,6 +76,13 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
 
   const remoteCommands = registerRemoteCommandHandlers(client, session, {
     configStore: new PrismaConfigurationStore(instance.id),
+    // Prisma-backed stores for ReserveNow/CancelReservation, SetChargingProfile/
+    // ClearChargingProfile, and SendLocalList/GetLocalListVersion state, so each survives a
+    // restart instead of falling back to src/lib/ocpp's in-memory-only defaults (round 2's job
+    // per AUDIT-state.md — the OCPP-layer owner added the injectable store interfaces themselves).
+    reservationStore: new PrismaReservationStore(instance.id),
+    chargingProfileStore: new PrismaChargingProfileStore(instance.id),
+    localAuthListStore: new PrismaLocalAuthListStore(instance.id),
     onError: (err) => {
       if (entry.manuallyStopped) return;
       void writeStatus(instance.id, { statusReason: err.message });

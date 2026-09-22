@@ -30,6 +30,13 @@ function createMessageQueue(serverSocket: WebSocket) {
         if (frame[2] === action) return frame;
       }
     },
+    /** Reads frames until the CALLRESULT ([3, messageId, payload]) for a CALL this test itself sent. */
+    async nextResultFor(messageId: string): Promise<unknown[]> {
+      for (;;) {
+        const frame = await this.next();
+        if (frame[0] === 3 && frame[1] === messageId) return frame;
+      }
+    },
   };
 }
 
@@ -128,6 +135,44 @@ describe.skipIf(!process.env.DATABASE_URL)("runtime (integration)", () => {
 
       const stillDisconnected = await prisma.deviceInstance.findUniqueOrThrow({ where: { id: staleInstance.id } });
       expect(stillDisconnected.status).toBe("DISCONNECTED");
+    } finally {
+      await server.close();
+    }
+  });
+
+  // AUDIT-state.md's round-2 addendum: reservationStore/chargingProfileStore/localAuthListStore
+  // are wired into registerRemoteCommandHandlers here — verify a real CSMS-initiated ReserveNow
+  // actually persists via PrismaReservationStore (not just the in-memory default), proving the
+  // wiring, not just the store class in isolation.
+  it("a CSMS-initiated ReserveNow persists to DeviceInstanceReservation via the wired PrismaReservationStore", async () => {
+    const server = await MockCsmsServer.start();
+    try {
+      const created = await createTestModelAndInstance({ csmsUrl: server.url });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+
+      await startDeviceInstance(instanceId);
+      const serverSocket = await server.waitForConnection();
+      const queue = createMessageQueue(serverSocket);
+
+      const [, bootId] = await queue.nextByAction("BootNotification");
+      serverSocket.send(JSON.stringify([3, bootId, { status: "Accepted", interval: 300 }]));
+
+      serverSocket.send(
+        JSON.stringify([
+          2,
+          "reserve-1",
+          "ReserveNow",
+          { connectorId: 1, expiryDate: "2099-01-01T00:00:00Z", idTag: "RESERVED-CARD", reservationId: 42 },
+        ]),
+      );
+      const [, , resultPayload] = await queue.nextResultFor("reserve-1");
+      expect(resultPayload).toEqual({ status: "Accepted" });
+
+      const row = await prisma.deviceInstanceReservation.findUnique({
+        where: { deviceInstanceId_reservationId: { deviceInstanceId: instanceId, reservationId: 42 } },
+      });
+      expect(row).toMatchObject({ connectorId: 1, idTag: "RESERVED-CARD" });
     } finally {
       await server.close();
     }

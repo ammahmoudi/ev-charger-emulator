@@ -64,12 +64,18 @@ enum DeviceConnectionStatus {
   FAULTED
 }
 
-/// Authorization outcome an idTag carries in the local authorization list/cache, mirroring
-/// OCPP 1.6's `AuthorizationStatus` values a charger can decide locally without contacting the CSMS.
+/// Authorization outcome an idTag carries in the local authorization list/cache, mirroring OCPP
+/// 1.6's `AuthorizationStatus` values a charger can decide locally without contacting the CSMS.
+/// Matches `OcppIdTagStatus` (`src/lib/ocpp/remote-command-types.ts`) 1:1 — this table backs both
+/// `rfid.ts`'s local-auth lookup (round 1) and `OcppLocalAuthListStore`'s `SendLocalList`/
+/// `GetLocalListVersion` persistence (round 2's `PrismaLocalAuthListStore`), the same underlying
+/// concept (a real charger's local authorization list) reached from two directions.
 enum LocalAuthEntryStatus {
   ACCEPTED
   BLOCKED
   EXPIRED
+  INVALID
+  CONCURRENT_TX
 }
 
 /// OCPP action queued in a device instance's offline outbox (see `DeviceInstanceOutboxMessage`).
@@ -210,6 +216,11 @@ model DeviceInstance {
   /// as `diagnosticsInstanceState`.
   hardwareTestInstanceState Json?
 
+  /// `OcppLocalAuthListStore`'s version counter (`SendLocalList`/`GetLocalListVersion`) — see
+  /// `PrismaLocalAuthListStore`. Not used by `rfid.ts`'s own local-auth lookup, only the
+  /// OCPP-protocol-facing side of `DeviceInstanceLocalAuthEntry`.
+  localAuthListVersion Int @default(0)
+
   parameters                DeviceInstanceParameter[]
   events                    DeviceInstanceEvent[]
   sessions                  DeviceInstanceSession[]
@@ -217,6 +228,8 @@ model DeviceInstance {
   connectorDiagnosticStates DeviceInstanceConnectorDiagnosticState[]
   localAuthEntries          DeviceInstanceLocalAuthEntry[]
   outboxMessages            DeviceInstanceOutboxMessage[]
+  reservations              DeviceInstanceReservation[]
+  chargingProfiles          DeviceInstanceChargingProfile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -240,11 +253,61 @@ model DeviceInstanceLocalAuthEntry {
   status LocalAuthEntryStatus @default(ACCEPTED)
 
   cacheExpiryDateTime DateTime?
+  /// The idTag whose authorization this one inherits when presented (OCPP's `idTagInfo.parentIdTag`),
+  /// e.g. a fleet card authorized under its fleet's parent id. Only meaningful for
+  /// `PrismaLocalAuthListStore`-written entries (`SendLocalList`); `rfid.ts`'s own lookup ignores it.
+  parentIdTag         String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([deviceInstanceId, idTag])
+  @@index([deviceInstanceId])
+}
+
+/// Persisted `ReserveNow`/`CancelReservation` state (see `OcppReservationStore`,
+/// `PrismaReservationStore`) — survives a restart, unlike the expiry *timer* itself
+/// (`src/lib/ocpp/reservation.ts` keeps that in-memory/runtime-only by design; a restart with a
+/// still-valid reservation row here just won't auto-expire until the process re-arms it, which
+/// this round doesn't implement — see AUDIT-state.md's round-2 addendum).
+model DeviceInstanceReservation {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  reservationId Int
+  connectorId   Int
+  idTag         String
+  parentIdTag   String?
+  expiryDate    DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, reservationId])
+  @@index([deviceInstanceId])
+}
+
+/// Persisted `SetChargingProfile`/`ClearChargingProfile` state (see `OcppChargingProfileStore`,
+/// `PrismaChargingProfileStore`), keyed by `chargingProfileId`. `profile` holds the full raw
+/// `csChargingProfiles` object as JSON — `ClearChargingProfile`'s id/connectorId/purpose/
+/// stackLevel filtering logic stays in `src/lib/ocpp/charging-profile.ts`, operating over
+/// whatever a store's `list()` returns.
+model DeviceInstanceChargingProfile {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  chargingProfileId Int
+  connectorId       Int
+  profile           Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, chargingProfileId])
   @@index([deviceInstanceId])
 }
 
