@@ -1,6 +1,10 @@
 import type { OcppChargePointStatus } from "@/lib/ocpp";
 import { orderModelConnectors } from "@/lib/device-instances/connectors";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
+// Circular import with hardware-test-state.ts (which imports listConnectorStates back from this
+// file) — safe here since both directions only call functions from inside async function
+// bodies, never at module-evaluation time; see the two-way collision guard below.
+import { isHardwareTestOutputRunning } from "@/lib/device-instances/hardware-test-state";
 import { queueOutboxMessage } from "@/lib/device-instances/outbox";
 import { callOcpp, getOrCreateChargePointSession } from "@/lib/device-instances/runtime";
 import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
@@ -79,6 +83,20 @@ export interface StopSessionResult {
 }
 
 class ConnectorSessionError extends Error {}
+
+/**
+ * Refuses to start a real/local charging session on a connector currently running a hardware
+ * output test (`hardware-test-state.ts`'s Charging Test tab / plug contactor actions) — the other
+ * half of the two-way collision guard (see `hardware-test-state.ts::setOutputRunning`'s matching
+ * check the other direction).
+ */
+function assertNoHardwareTestCollision(deviceInstanceId: string, connectorId: number): void {
+  if (isHardwareTestOutputRunning(deviceInstanceId, connectorId)) {
+    throw new ConnectorSessionError(
+      `Connector ${connectorId} is running a hardware output test — stop it before starting a charging session`,
+    );
+  }
+}
 
 function currentEnergyWh(chargeRateKw: number, startedAt: Date, now: Date): number {
   const elapsedMs = Math.max(0, now.getTime() - startedAt.getTime());
@@ -308,6 +326,7 @@ export async function startChargingSession(
   if (options.chargeRateKw <= 0) {
     throw new ConnectorSessionError("chargeRateKw must be > 0");
   }
+  assertNoHardwareTestCollision(deviceInstanceId, connectorId);
 
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
@@ -356,6 +375,7 @@ export async function adoptRemoteSession(
   connectorId: number,
   options: { idTag: string; transactionId: number; chargeRateKw: number },
 ): Promise<ConnectorRuntimeView> {
+  assertNoHardwareTestCollision(deviceInstanceId, connectorId);
   const state = await getOrCreateState(deviceInstanceId, connectorId);
   if (state.activeStartedAt) {
     throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);

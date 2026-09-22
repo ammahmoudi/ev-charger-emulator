@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getHardwareTestState,
+  HardwareTestStateError,
   setAuxPowerAction,
   setChargingTestSettings,
   setContactorAction,
@@ -17,11 +18,13 @@ const CONNECTORS = [
   { connectorId: 2, label: "Plug B" },
 ];
 
-function createDeps() {
+function createDeps(overrides: Partial<HardwareTestStateDeps> = {}) {
   const setConnectorStatus = vi.fn();
   const deps: HardwareTestStateDeps = {
     getConnectors: vi.fn().mockResolvedValue(CONNECTORS),
     getSession: vi.fn().mockResolvedValue({ setConnectorStatus }),
+    getActiveConnectorSession: vi.fn().mockResolvedValue(null),
+    ...overrides,
   };
   return { deps, setConnectorStatus };
 }
@@ -80,6 +83,26 @@ describe("hardware-test-state", () => {
 
     const stopped = await stopChargingTest(instanceId, 1, deps);
     expect(setConnectorStatus).toHaveBeenCalledWith(1, "Available");
+    expect(stopped.plugs.find((p) => p.connectorId === 1)!.outputRunning).toBe(false);
+  });
+
+  it("refuses to start a hardware output test when connector-sessions already has an active session on that connector", async () => {
+    const { deps } = createDeps({ getActiveConnectorSession: vi.fn().mockResolvedValue({ status: "Charging" }) });
+    const instanceId = `${INSTANCE_ID}-collision`;
+
+    await expect(startChargingTest(instanceId, 1, deps)).rejects.toThrow(HardwareTestStateError);
+    await expect(startChargingTest(instanceId, 1, deps)).rejects.toThrow(/active charging session/);
+  });
+
+  it("still allows stopping a hardware output test even if connector-sessions reports an active session", async () => {
+    const getActiveConnectorSession = vi.fn().mockResolvedValue(null);
+    const { deps } = createDeps({ getActiveConnectorSession });
+    const instanceId = `${INSTANCE_ID}-collision-stop`;
+
+    await startChargingTest(instanceId, 1, deps);
+    getActiveConnectorSession.mockResolvedValue({ status: "Charging" });
+
+    const stopped = await stopChargingTest(instanceId, 1, deps);
     expect(stopped.plugs.find((p) => p.connectorId === 1)!.outputRunning).toBe(false);
   });
 

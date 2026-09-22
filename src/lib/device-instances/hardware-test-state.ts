@@ -1,6 +1,10 @@
 import type { OcppChargePointSession } from "@/lib/ocpp";
 import { prisma } from "@/lib/prisma";
 import { orderModelConnectors } from "./connectors";
+// Circular import with connector-sessions.ts (which imports isHardwareTestOutputRunning back
+// from this file) — safe here since both directions only call functions from inside async
+// function bodies, never at module-evaluation time; see the two-way collision guard below.
+import { listConnectorStates } from "./connector-sessions";
 import { getOrCreateChargePointSession } from "./runtime";
 import type {
   AuxPowerAction,
@@ -59,9 +63,26 @@ interface InternalState {
   imei: string;
 }
 
+export class HardwareTestStateError extends Error {}
+
+/** Session statuses `connector-sessions.ts` considers "active" — a hardware output test must not start on top of one of these. */
+const ACTIVE_SESSION_STATUSES = new Set(["Preparing", "Charging", "Finishing"]);
+
 export interface HardwareTestStateDeps {
   getConnectors: (instanceId: string) => Promise<ConnectorRef[]>;
   getSession: (instanceId: string) => Promise<Pick<OcppChargePointSession, "setConnectorStatus">>;
+  /**
+   * Checks whether `connector-sessions.ts` already has an active (`Preparing`/`Charging`/
+   * `Finishing`) real/local charging session on this connector — see the collision guard in
+   * `setOutputRunning` below. Injectable so tests don't need a real instance/DB row.
+   */
+  getActiveConnectorSession: (instanceId: string, connectorId: number) => Promise<{ status: string } | null>;
+}
+
+async function fetchActiveConnectorSession(instanceId: string, connectorId: number): Promise<{ status: string } | null> {
+  const state = (await listConnectorStates(instanceId)).find((c) => c.connectorId === connectorId);
+  if (!state || !ACTIVE_SESSION_STATUSES.has(state.status)) return null;
+  return { status: state.status };
 }
 
 /**
@@ -83,6 +104,7 @@ async function fetchConnectors(instanceId: string): Promise<ConnectorRef[]> {
 const defaultDeps: HardwareTestStateDeps = {
   getConnectors: fetchConnectors,
   getSession: getOrCreateChargePointSession,
+  getActiveConnectorSession: fetchActiveConnectorSession,
 };
 
 const globalForHardwareTest = globalThis as unknown as {
@@ -282,6 +304,12 @@ export async function setChargingTestSettings(
  * "start/stop test" button and the corresponding Plug A/B Test tab's "Contactor action",
  * since both represent the same physical action (closing the output contactor). Reflects
  * the change on the instance's real `OcppChargePointSession` connector status.
+ *
+ * Starting (not stopping) refuses when `connector-sessions.ts` already has an active
+ * (`Preparing`/`Charging`/`Finishing`) real/local charging session on this connector — a
+ * hardware output test and a real session must not run concurrently on the same connector,
+ * each blind to the other (see `startChargingSession`/`adoptRemoteSession`'s matching guard the
+ * other direction, and AUDIT-state.md's round-2 addendum).
  */
 async function setOutputRunning(
   instanceId: string,
@@ -293,11 +321,29 @@ async function setOutputRunning(
   const state = getOrCreateInternalState(instanceId, connectors);
   const plug = requirePlug(state, connectorId);
 
+  if (running && !plug.outputRunning) {
+    const activeSession = await deps.getActiveConnectorSession(instanceId, connectorId);
+    if (activeSession) {
+      throw new HardwareTestStateError(
+        `Connector ${connectorId} already has an active charging session (status: ${activeSession.status}) — stop it before starting a hardware output test`,
+      );
+    }
+  }
+
   plug.outputRunning = running;
   const session = await deps.getSession(instanceId);
   session.setConnectorStatus(connectorId, running ? "Charging" : "Available");
 
   return renderState(instanceId, state, connectors);
+}
+
+/**
+ * Read-only check: is this connector's hardware output test currently running? Purely in-memory
+ * (no DB), synchronous. Used by `connector-sessions.ts` to refuse starting a real/local charging
+ * session on top of a running hardware test — the other half of the two-way collision guard.
+ */
+export function isHardwareTestOutputRunning(instanceId: string, connectorId: number): boolean {
+  return registry.get(instanceId)?.plugs.get(connectorId)?.outputRunning ?? false;
 }
 
 export function startChargingTest(

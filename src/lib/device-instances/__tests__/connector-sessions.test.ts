@@ -7,6 +7,7 @@ import {
   startChargingSession,
   stopChargingSession,
 } from "../connector-sessions";
+import { startChargingTest, stopChargingTest } from "../hardware-test-state";
 import { getInstanceConnectorStatuses } from "../runtime";
 import { createTestModelAndInstance, deleteTestDeviceModel, type TestDeviceModel } from "./test-helpers";
 import { prisma } from "@/lib/prisma";
@@ -143,5 +144,31 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     expect(result.energyKwh).toBeCloseTo(1.234, 3);
     const queued = await prisma.deviceInstanceOutboxMessage.findMany({ where: { deviceInstanceId: instanceId } });
     expect(queued).toHaveLength(0);
+  });
+
+  // Two-way collision guard with hardware-test-state.ts (AUDIT-state.md round-2 addendum): a
+  // hardware output test and a real/local charging session must not run concurrently on the same
+  // connector. The other direction (hardware-test-state.ts refusing to start on top of an active
+  // session) is covered in hardware-test-state.test.ts.
+  it("startChargingSession refuses to start on a connector running a hardware output test", async () => {
+    await setup();
+    await startChargingTest(instanceId, 1);
+
+    await expect(startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 })).rejects.toThrow(
+      /hardware output test/,
+    );
+
+    await stopChargingTest(instanceId, 1);
+    const view = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    expect(view.status).toBe("Preparing");
+  });
+
+  it("adoptRemoteSession refuses to start on a connector running a hardware output test", async () => {
+    await setup();
+    await startChargingTest(instanceId, 1);
+
+    await expect(
+      adoptRemoteSession(instanceId, 1, { idTag: "CARD-9", transactionId: 99, chargeRateKw: 10 }),
+    ).rejects.toThrow(/hardware output test/);
   });
 });
