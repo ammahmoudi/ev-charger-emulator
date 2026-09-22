@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 
 import { badRequest, isUniqueConstraintError, isValidWebSocketUrl } from "@/lib/device-instances/http";
 import { ParameterValidationError, validateParameterValue } from "@/lib/device-instances/parameters";
+import { reconcileRuntimeOnStartup } from "@/lib/device-instances/runtime";
 import { listDeviceInstances, serializeDeviceInstance } from "@/lib/device-instances/serialize";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
+  // Best-effort, once-per-process: reconnect any instance left `CONNECTED`/`CONNECTING` in the
+  // DB from before a real process restart (see `runtime.ts::reconcileRuntimeOnStartup`). The
+  // instance list is the first thing the dashboard loads, so this is a convenient hook without
+  // needing a dedicated server-startup lifecycle.
+  await reconcileRuntimeOnStartup();
   return NextResponse.json({ instances: await listDeviceInstances() });
 }
 
