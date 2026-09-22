@@ -368,3 +368,93 @@ Recommend adding tests for the DB-touching modules against that local Postgres (
 `prisma migrate deploy` against a dedicated test schema/DB in a vitest global setup) rather than
 mocking Prisma, since these modules are almost entirely persistence logic — mocking would test
 very little.
+
+---
+
+## Round 2 addendum
+
+Merged `agent/integration` (bringing in `agent/ui` + `agent/ocpp`'s work as of that merge, plus
+the cross-cutting CSMS-remote-session-visibility fix — see `AUDIT-integration.md`) and, later,
+`agent/ocpp` again (its `feat(ocpp): add injectable persistence stores...` +
+`fix(ocpp): throttle simulated charge rate...` commits) into this branch. Both merges were clean
+fast-forwards/no-conflict merges (`agent/ocpp` only ever touched `src/lib/ocpp/**`, never this
+agent's owned files). One pre-existing bug surfaced immediately by the first merge, fixed before
+starting the round-2 task list: `stopChargingSession`'s returned `energyKwh` was `round2()`'d to
+2 decimals in kWh, which silently discarded precision from `agent/integration`'s new
+`energyWhOverride` option (the real value the CSMS reported) — e.g. 1234 Wh became 1.23 kWh
+instead of 1.234. Fixed by rounding to the nearest Wh before converting instead.
+
+1. **Hardware-test / real-session collision guard — fixed.** `hardware-test-state.ts`'s
+   `setOutputRunning` (Charging Test tab, plug contactor actions) and `connector-sessions.ts`'s
+   `startChargingSession`/`adoptRemoteSession` could previously start concurrently on the same
+   connector, each blind to the other (flagged in `AUDIT-integration.md`'s "residual gap"
+   section). Added a two-way guard: `setOutputRunning` refuses to *start* (stopping stays always
+   allowed) when `connector-sessions.ts` shows an active (`Preparing`/`Charging`/`Finishing`)
+   session on that connector (a new injectable `getActiveConnectorSession` dep, keeping
+   `hardware-test-state.test.ts`'s existing DI-based tests DB-free); `startChargingSession`/
+   `adoptRemoteSession` refuse to start when `hardware-test-state.ts`'s per-connector
+   `outputRunning` is true (a new `isHardwareTestOutputRunning` read-only getter). The two files
+   now have a real circular import for this (each calls a read-only getter from the other) — safe
+   here since both directions only call the imported function from inside async function bodies,
+   never at module-evaluation time; verified with the full test suite (no runtime issues).
+
+2. **Diagnostics/hardware-test toggle-state persistence — fixed.** Both modules' fault-injection/
+   test-panel toggle fields (health grid, per-plug comm/health flags, module comm flags,
+   `outputRunning`/`auxPowerMode`/`lockStatus`, charging-test settings, pile contactor/breaker
+   state) were 100% in-memory `globalThis` Maps — this was a known, deliberate tradeoff from each
+   module's *original* ticket, but the current brief explicitly asks for restart-survival. New
+   `DeviceInstance.diagnosticsInstanceState`/`hardwareTestInstanceState` JSON columns (instance-
+   level toggle state) and a new `DeviceInstanceConnectorDiagnosticState` table (per-connector
+   toggle state for both modules, kept separate from `DeviceInstanceConnectorState` which tracks
+   live session/lock state, not fault-injection/test-panel toggles). Jittered numeric readouts
+   stay ephemeral/recomputed on read, as before — only the toggled booleans/enums are persisted.
+   Both modules keep their in-memory Map as a same-process read cache (populated from Postgres on
+   first access per instance) so polling doesn't add a DB round-trip per read. Also found and
+   fixed a related pre-existing gap while here: `hardware-test-state.ts` never had a
+   `disposeHardwareTestState` cleanup hook (unlike `diagnostics.ts`'s `disposeDiagnosticState`,
+   which `DELETE /api/device-instances/[id]` already called) — added one and wired it in.
+
+3. **`PrismaConfigurationStore.set()` validation — fixed.** A CSMS-initiated
+   `ChangeConfiguration` now runs the incoming value through the same `validateParameterValue`
+   the Settings-UI edit path already applies (`valueType`/`enumOptions`/min/max), returning
+   `"Rejected"` instead of silently persisting an invalid value.
+
+4. **Hot-path round-trip reduction — fixed.** `startChargingSession`/`stopChargingSession`/
+   `setConnectorLock`/`clearConnectorFault` each independently re-fetched the instance+connector-
+   topology graph up to 3-4 times per call (once via `getConnectorLabel`, again via the trailing
+   `listConnectorStates` call, again inside `resolvePreparingPromotion`/`resolveFinishingPromotion`
+   when a promotion fired). Each now fetches it once (`loadOrderedConnectors`) and threads it
+   through; `listConnectorStates` accepts an optional `preloadedConnectors` param (falling back to
+   its own fetch when omitted, so no external caller is affected). No behavior change — same
+   queries for the same data, just once instead of several times per call.
+
+5. **`agent/ocpp`'s Prisma-backed store side — fixed, once `agent/ocpp` was ready.** `agent/ocpp`
+   added injectable `OcppReservationStore`/`OcppChargingProfileStore`/`OcppLocalAuthListStore`
+   interfaces (in-memory defaults) for `ReserveNow`/`SetChargingProfile`/`SendLocalList` state.
+   Implemented the Prisma-backed side: new `DeviceInstanceReservation`/
+   `DeviceInstanceChargingProfile` tables, and a `PrismaLocalAuthListStore` that *reuses* round 1's
+   `DeviceInstanceLocalAuthEntry` table (rather than duplicating it) — `SendLocalList` and
+   `rfid.ts`'s own local-auth lookup are the same underlying concept (a charger's local
+   authorization list) reached from two directions, so `LocalAuthEntryStatus` was expanded
+   (`INVALID`/`CONCURRENT_TX` added) and `parentIdTag` added to match `OcppIdTagStatus` 1:1, plus
+   a new `DeviceInstance.localAuthListVersion` counter. All three wired into `runtime.ts`'s
+   `registerRemoteCommandHandlers` call. The reservation *expiry timer* itself stays runtime-only
+   (`src/lib/ocpp/reservation.ts`'s own design, unchanged) — a still-valid reservation row left
+   behind by a restart won't auto-expire until the process re-arms it, which isn't implemented
+   this round; flagging as a follow-up. Caught and fixed a real bug while adding tests:
+   `PrismaLocalAuthListStore`'s read path cast the SCREAMING_CASE Prisma enum value directly to
+   `OcppIdTagStatus` instead of mapping it back to PascalCase, so every read returned e.g.
+   `"ACCEPTED"` instead of `"Accepted"` — caught by
+   `prisma-local-auth-list-store.test.ts`'s round-trip assertions.
+
+### Testing (round 2)
+
+`npx vitest run`, `npx tsc --noEmit`, and `npx eslint .` were run after every commit in this round,
+against the real local Postgres (`docker compose up -d` + `.env` from `.env.example`, per the
+README) — **confirmed real, not skipped**: the DB-gated `describe.skipIf(!process.env.DATABASE_URL)`
+blocks all ran for real throughout (this session has genuine Docker/network access, unlike the
+`agent/integration` pass's sandbox, which could not reach the Postgres container's mapped port —
+see `AUDIT-integration.md`'s Testing section). Final state: **196/196 tests passing** (up from
+128 at the end of round 1; the rest came from the `agent/ocpp`/`agent/ui` merges plus round 2's
+own new tests), `tsc --noEmit` clean except the one pre-existing, unrelated `src/app/layout.tsx`
+error, `eslint` clean.
