@@ -558,7 +558,11 @@ export async function stopChargingSession(
     transactionId: state.activeTransactionId,
     startedAt: state.activeStartedAt.toISOString(),
     stoppedAt: stoppedAt.toISOString(),
-    energyKwh: round2(energyWh / WH_PER_KWH),
+    // Round to the nearest Wh before converting rather than round2()-ing the kWh result: energyWh
+    // is already the finest-grained unit tracked (and, via energyWhOverride, may be the CSMS's own
+    // reported register value), so this avoids losing precision a 2-decimal-kWh rounding would
+    // (e.g. 1234 Wh -> 1.234 kWh, not 1.23).
+    energyKwh: Math.round(energyWh) / WH_PER_KWH,
     cost,
     currency,
     stopCause: options.stopCause,
