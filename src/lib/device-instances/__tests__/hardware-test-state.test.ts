@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  disposeHardwareTestState,
   getHardwareTestState,
+  HardwareTestStateError,
+  isHardwareTestOutputRunning,
   setAuxPowerAction,
   setChargingTestSettings,
   setContactorAction,
@@ -11,17 +14,20 @@ import {
   stopChargingTest,
   type HardwareTestStateDeps,
 } from "../hardware-test-state";
+import { createTestModelAndInstance, deleteTestDeviceModel, type TestDeviceModel } from "./test-helpers";
 
 const CONNECTORS = [
   { connectorId: 1, label: "Plug A" },
   { connectorId: 2, label: "Plug B" },
 ];
 
-function createDeps() {
+function createDeps(overrides: Partial<HardwareTestStateDeps> = {}) {
   const setConnectorStatus = vi.fn();
   const deps: HardwareTestStateDeps = {
     getConnectors: vi.fn().mockResolvedValue(CONNECTORS),
     getSession: vi.fn().mockResolvedValue({ setConnectorStatus }),
+    getActiveConnectorSession: vi.fn().mockResolvedValue(null),
+    ...overrides,
   };
   return { deps, setConnectorStatus };
 }
@@ -83,6 +89,26 @@ describe("hardware-test-state", () => {
     expect(stopped.plugs.find((p) => p.connectorId === 1)!.outputRunning).toBe(false);
   });
 
+  it("refuses to start a hardware output test when connector-sessions already has an active session on that connector", async () => {
+    const { deps } = createDeps({ getActiveConnectorSession: vi.fn().mockResolvedValue({ status: "Charging" }) });
+    const instanceId = `${INSTANCE_ID}-collision`;
+
+    await expect(startChargingTest(instanceId, 1, deps)).rejects.toThrow(HardwareTestStateError);
+    await expect(startChargingTest(instanceId, 1, deps)).rejects.toThrow(/active charging session/);
+  });
+
+  it("still allows stopping a hardware output test even if connector-sessions reports an active session", async () => {
+    const getActiveConnectorSession = vi.fn().mockResolvedValue(null);
+    const { deps } = createDeps({ getActiveConnectorSession });
+    const instanceId = `${INSTANCE_ID}-collision-stop`;
+
+    await startChargingTest(instanceId, 1, deps);
+    getActiveConnectorSession.mockResolvedValue({ status: "Charging" });
+
+    const stopped = await stopChargingTest(instanceId, 1, deps);
+    expect(stopped.plugs.find((p) => p.connectorId === 1)!.outputRunning).toBe(false);
+  });
+
   it("setContactorAction is equivalent to the Charging Test start/stop control", async () => {
     const { deps, setConnectorStatus } = createDeps();
     const instanceId = `${INSTANCE_ID}-contactor`;
@@ -140,5 +166,55 @@ describe("hardware-test-state", () => {
     await expect(setChargingTestSettings(instanceId, { selectedConnectorId: 99 }, deps)).rejects.toThrow(
       "Unknown connectorId 99",
     );
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("hardware-test-state persistence (integration)", () => {
+  let deviceModel: TestDeviceModel;
+  let instanceId: string;
+
+  afterEach(async () => {
+    if (deviceModel) await deleteTestDeviceModel(deviceModel.id);
+  });
+
+  async function setup() {
+    const created = await createTestModelAndInstance();
+    deviceModel = created.deviceModel;
+    instanceId = created.instance.id;
+  }
+
+  // `disposeHardwareTestState` clears this module's in-memory cache for an instance — calling it
+  // and then re-reading is exactly what happens on a real restart, used here to simulate one
+  // without needing a second process (mirrors diagnostics.test.ts's same technique).
+  it("per-plug toggles and instance-level settings survive a simulated restart", async () => {
+    await setup();
+
+    await setLockAction(instanceId, 1, "stop");
+    await setAuxPowerAction(instanceId, 1, "12V");
+    await setChargingTestSettings(instanceId, { interfaceBoardTestMode: true, outputMode: "HalfLoadOutput" });
+    await setPileContactorAction(instanceId, "fanContactor", "start");
+
+    disposeHardwareTestState(instanceId);
+
+    const state = await getHardwareTestState(instanceId);
+    expect(state.plugs.find((p) => p.connectorId === 1)!.lockStatus).toBe("Unlocked");
+    expect(state.plugs.find((p) => p.connectorId === 1)!.auxPowerMode).toBe("12V");
+    expect(state.chargingTest.interfaceBoardTestMode).toBe(true);
+    expect(state.chargingTest.outputMode).toBe("HalfLoadOutput");
+    expect(state.pile.fanContactor).toBe("Closed");
+    // Untouched fields still default normally.
+    expect(state.plugs.find((p) => p.connectorId === 2)!.lockStatus).toBe("Locked");
+    expect(state.pile.breakerStatus).toBe("Closed");
+  });
+
+  it("outputRunning survives a simulated restart, and isHardwareTestOutputRunning reflects it once the cache is warmed", async () => {
+    await setup();
+
+    await startChargingTest(instanceId, 1);
+    disposeHardwareTestState(instanceId);
+
+    const state = await getHardwareTestState(instanceId);
+    expect(state.plugs.find((p) => p.connectorId === 1)!.outputRunning).toBe(true);
+    expect(isHardwareTestOutputRunning(instanceId, 1)).toBe(true);
   });
 });

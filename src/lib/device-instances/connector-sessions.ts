@@ -1,6 +1,10 @@
 import type { OcppChargePointStatus } from "@/lib/ocpp";
-import { orderModelConnectors } from "@/lib/device-instances/connectors";
+import { orderModelConnectors, type OrderedDeviceModelConnector } from "@/lib/device-instances/connectors";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
+// Circular import with hardware-test-state.ts (which imports listConnectorStates back from this
+// file) — safe here since both directions only call functions from inside async function
+// bodies, never at module-evaluation time; see the two-way collision guard below.
+import { isHardwareTestOutputRunning } from "@/lib/device-instances/hardware-test-state";
 import { queueOutboxMessage } from "@/lib/device-instances/outbox";
 import { callOcpp, getOrCreateChargePointSession } from "@/lib/device-instances/runtime";
 import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
@@ -80,6 +84,20 @@ export interface StopSessionResult {
 
 class ConnectorSessionError extends Error {}
 
+/**
+ * Refuses to start a real/local charging session on a connector currently running a hardware
+ * output test (`hardware-test-state.ts`'s Charging Test tab / plug contactor actions) — the other
+ * half of the two-way collision guard (see `hardware-test-state.ts::setOutputRunning`'s matching
+ * check the other direction).
+ */
+function assertNoHardwareTestCollision(deviceInstanceId: string, connectorId: number): void {
+  if (isHardwareTestOutputRunning(deviceInstanceId, connectorId)) {
+    throw new ConnectorSessionError(
+      `Connector ${connectorId} is running a hardware output test — stop it before starting a charging session`,
+    );
+  }
+}
+
 function currentEnergyWh(chargeRateKw: number, startedAt: Date, now: Date): number {
   const elapsedMs = Math.max(0, now.getTime() - startedAt.getTime());
   return round2((chargeRateKw * WH_PER_KWH * elapsedMs) / MS_PER_HOUR);
@@ -96,6 +114,27 @@ async function getOrCreateState(deviceInstanceId: string, connectorId: number) {
 type ConnectorState = Awaited<ReturnType<typeof getOrCreateState>>;
 
 /**
+ * Fetches an instance's device-model connector topology, ordered/numbered the same way
+ * everywhere else in the app (see `connectors.ts::orderModelConnectors`). Callers on the
+ * hot-polled path (`startChargingSession`/`stopChargingSession`/`setConnectorLock`/
+ * `clearConnectorFault`) fetch this once per call and thread it through instead of each doing
+ * their own independent `DeviceInstance`+`DeviceModelConnector` round-trip (previously up to
+ * 3-4 per call — see AUDIT-state.md's round-2 addendum).
+ */
+async function loadOrderedConnectors(deviceInstanceId: string): Promise<OrderedDeviceModelConnector[]> {
+  const instance = await prisma.deviceInstance.findUniqueOrThrow({
+    where: { id: deviceInstanceId },
+    include: { deviceModel: { include: { connectors: true } } },
+  });
+  return orderModelConnectors(instance.deviceModel.connectors);
+}
+
+/** Pure lookup against an already-loaded connector list — no DB round-trip. */
+function labelForConnector(connectors: OrderedDeviceModelConnector[], connectorId: number): string | null {
+  return connectors.find((c) => c.connectorId === connectorId)?.displayLabel ?? null;
+}
+
+/**
  * If `state` has been sitting in `Preparing` for at least `PREPARING_DURATION_MS`, promotes it
  * to `Charging`: mints the transaction id (mirroring real OCPP, where a charge point has none
  * until StartTransaction is accepted) and resets `activeStartedAt` to the moment charging
@@ -107,6 +146,7 @@ async function resolvePreparingPromotion(
   deviceInstanceId: string,
   state: ConnectorState,
   now: Date,
+  connectors: OrderedDeviceModelConnector[],
 ): Promise<ConnectorState | null> {
   if (state.status !== "Preparing" || !state.activeStartedAt) return null;
   if (now.getTime() - state.activeStartedAt.getTime() < PREPARING_DURATION_MS) return null;
@@ -132,7 +172,7 @@ async function resolvePreparingPromotion(
   });
   if (count === 0) return updated;
 
-  const label = (await getConnectorLabel(deviceInstanceId, state.connectorId)) ?? `Connector ${state.connectorId}`;
+  const label = labelForConnector(connectors, state.connectorId) ?? `Connector ${state.connectorId}`;
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Charging`, chargingStartedAt);
   await logDeviceInstanceEvent(
     deviceInstanceId,
@@ -154,6 +194,7 @@ async function resolveFinishingPromotion(
   deviceInstanceId: string,
   state: ConnectorState,
   now: Date,
+  connectors: OrderedDeviceModelConnector[],
 ): Promise<ConnectorState | null> {
   if (state.status !== "Finishing" || !state.finishingSince) return null;
   if (now.getTime() - state.finishingSince.getTime() < FINISHING_DURATION_MS) return null;
@@ -170,7 +211,7 @@ async function resolveFinishingPromotion(
   });
   if (count === 0) return updated;
 
-  const label = (await getConnectorLabel(deviceInstanceId, state.connectorId)) ?? `Connector ${state.connectorId}`;
+  const label = labelForConnector(connectors, state.connectorId) ?? `Connector ${state.connectorId}`;
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to ${finalStatus}`, now);
   await notifySessionStatus(deviceInstanceId, state.connectorId, finalStatus as OcppChargePointStatus);
 
@@ -178,9 +219,15 @@ async function resolveFinishingPromotion(
 }
 
 /** Resolves either pending promotion (`Preparing`->`Charging` or `Finishing`->final status) due for `state`. */
-async function resolvePendingPromotion(deviceInstanceId: string, state: ConnectorState, now: Date): Promise<ConnectorState | null> {
+async function resolvePendingPromotion(
+  deviceInstanceId: string,
+  state: ConnectorState,
+  now: Date,
+  connectors: OrderedDeviceModelConnector[],
+): Promise<ConnectorState | null> {
   return (
-    (await resolvePreparingPromotion(deviceInstanceId, state, now)) ?? (await resolveFinishingPromotion(deviceInstanceId, state, now))
+    (await resolvePreparingPromotion(deviceInstanceId, state, now, connectors)) ??
+    (await resolveFinishingPromotion(deviceInstanceId, state, now, connectors))
   );
 }
 
@@ -193,21 +240,25 @@ async function resolvePendingPromotion(deviceInstanceId: string, state: Connecto
  * long enough to move on (see `resolvePendingPromotion`) — there's no background job, so this
  * read path (polled by the Home screen every couple seconds) is what actually advances the
  * state machine.
+ *
+ * `preloadedConnectors`, when given, skips this function's own connector-topology fetch — used
+ * by the hot-polled mutation functions below, which already loaded it via `loadOrderedConnectors`
+ * for their own label lookup and would otherwise fetch the same data twice.
  */
-export async function listConnectorStates(deviceInstanceId: string): Promise<ConnectorRuntimeView[]> {
-  const instance = await prisma.deviceInstance.findUniqueOrThrow({
-    where: { id: deviceInstanceId },
-    include: { deviceModel: { include: { connectors: true } } },
-  });
+export async function listConnectorStates(
+  deviceInstanceId: string,
+  preloadedConnectors?: OrderedDeviceModelConnector[],
+): Promise<ConnectorRuntimeView[]> {
+  const connectors = preloadedConnectors ?? (await loadOrderedConnectors(deviceInstanceId));
 
   const states = await prisma.deviceInstanceConnectorState.findMany({ where: { deviceInstanceId } });
   const now = new Date();
   const resolvedStates = await Promise.all(
-    states.map(async (state) => (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state),
+    states.map(async (state) => (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state),
   );
   const stateByConnectorId = new Map(resolvedStates.map((s) => [s.connectorId, s]));
 
-  return orderModelConnectors(instance.deviceModel.connectors).map((connector) => {
+  return connectors.map((connector) => {
     const connectorId = connector.connectorId;
     const state = stateByConnectorId.get(connectorId);
     const activeSession =
@@ -232,16 +283,6 @@ export async function listConnectorStates(deviceInstanceId: string): Promise<Con
   });
 }
 
-async function getConnectorLabel(deviceInstanceId: string, connectorId: number): Promise<string | null> {
-  const instance = await prisma.deviceInstance.findUnique({
-    where: { id: deviceInstanceId },
-    select: { deviceModel: { select: { connectors: true } } },
-  });
-  if (!instance) return null;
-  const connector = orderModelConnectors(instance.deviceModel.connectors).find((c) => c.connectorId === connectorId);
-  return connector?.displayLabel ?? null;
-}
-
 /**
  * Sets a connector's manual lock state (issue #14's Lock screen). Mirrors `UnlockConnector`
  * handling from issue #10, but triggered locally instead of by the CSMS: unlocking a connector
@@ -253,9 +294,9 @@ export async function setConnectorLock(
   connectorId: number,
   locked: boolean,
 ): Promise<ConnectorRuntimeView> {
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
   const state = await getOrCreateState(deviceInstanceId, connectorId);
-  const label = await getConnectorLabel(deviceInstanceId, connectorId);
-  const displayLabel = label ?? `Connector ${connectorId}`;
+  const displayLabel = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
 
   if (!locked && state.activeStartedAt) {
     await stopChargingSession(deviceInstanceId, connectorId, { stopCause: "UnlockConnector" });
@@ -272,22 +313,23 @@ export async function setConnectorLock(
     `${displayLabel}: UnlockConnector (local) → ${locked ? "locked" : "Unlocked"}`,
   );
 
-  const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
 }
 
 /** Clears a connector's `Faulted` status back to `Available` (a local stand-in for the real device's manual reset). */
 export async function clearConnectorFault(deviceInstanceId: string, connectorId: number): Promise<ConnectorRuntimeView> {
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
   await getOrCreateState(deviceInstanceId, connectorId);
   await prisma.deviceInstanceConnectorState.update({
     where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
     data: { status: "Available" },
   });
-  const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
+  const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Available (Event Clear)`);
   await notifySessionStatus(deviceInstanceId, connectorId, "Available");
 
-  const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
 }
 
@@ -308,10 +350,12 @@ export async function startChargingSession(
   if (options.chargeRateKw <= 0) {
     throw new ConnectorSessionError("chargeRateKw must be > 0");
   }
+  assertNoHardwareTestCollision(deviceInstanceId, connectorId);
 
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
-  state = (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state;
+  state = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
 
   if (state.activeStartedAt) {
     throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);
@@ -320,7 +364,7 @@ export async function startChargingSession(
     throw new ConnectorSessionError(`Connector ${connectorId} is not Available (status: ${state.status})`);
   }
 
-  const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
+  const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
   const startedAt = now;
 
   await prisma.deviceInstanceConnectorState.update({
@@ -338,7 +382,7 @@ export async function startChargingSession(
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Preparing`, startedAt);
   await notifySessionStatus(deviceInstanceId, connectorId, "Preparing");
 
-  const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
 }
 
@@ -356,12 +400,14 @@ export async function adoptRemoteSession(
   connectorId: number,
   options: { idTag: string; transactionId: number; chargeRateKw: number },
 ): Promise<ConnectorRuntimeView> {
+  assertNoHardwareTestCollision(deviceInstanceId, connectorId);
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
   const state = await getOrCreateState(deviceInstanceId, connectorId);
   if (state.activeStartedAt) {
     throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);
   }
 
-  const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
+  const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
   const startedAt = new Date();
 
   await prisma.deviceInstanceConnectorState.update({
@@ -386,7 +432,7 @@ export async function adoptRemoteSession(
     startedAt,
   );
 
-  const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
 }
 
@@ -441,15 +487,16 @@ export async function stopChargingSession(
     energyWhOverride?: number;
   },
 ): Promise<StopSessionResult> {
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
-  state = (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state;
+  state = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
 
   if (!state.activeStartedAt || !state.activeIdTag || !state.activeChargeRateKw) {
     throw new ConnectorSessionError(`Connector ${connectorId} has no session in progress`);
   }
 
-  const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
+  const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
   const stoppedAt = new Date();
   const energyWh =
     options.energyWhOverride ??
@@ -558,7 +605,11 @@ export async function stopChargingSession(
     transactionId: state.activeTransactionId,
     startedAt: state.activeStartedAt.toISOString(),
     stoppedAt: stoppedAt.toISOString(),
-    energyKwh: round2(energyWh / WH_PER_KWH),
+    // Round to the nearest Wh before converting rather than round2()-ing the kWh result: energyWh
+    // is already the finest-grained unit tracked (and, via energyWhOverride, may be the CSMS's own
+    // reported register value), so this avoids losing precision a 2-decimal-kWh rounding would
+    // (e.g. 1234 Wh -> 1.234 kWh, not 1.23).
+    energyKwh: Math.round(energyWh) / WH_PER_KWH,
     cost,
     currency,
     stopCause: options.stopCause,

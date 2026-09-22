@@ -13,7 +13,7 @@ async function assertInstanceExists(id: string) {
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!(await assertInstanceExists(id))) return notFound("Device instance not found");
-  return NextResponse.json({ overall: getOverallHealth(id) });
+  return NextResponse.json({ overall: await getOverallHealth(id) });
 }
 
 interface PatchBody {
@@ -40,6 +40,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return badRequest('value must be "normal" or "abnormal"', "value");
   }
 
-  const overall = setOverallHealthField(id, body.field as OverallHealthField, body.value);
+  const overall = await setOverallHealthField(id, body.field as OverallHealthField, body.value);
   return NextResponse.json({ overall });
 }

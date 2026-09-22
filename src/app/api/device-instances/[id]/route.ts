@@ -2,6 +2,7 @@ import { DeviceConnectionStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 import { disposeDiagnosticState } from "@/lib/device-instances/diagnostics";
+import { disposeHardwareTestState } from "@/lib/device-instances/hardware-test-state";
 import { disposeDeviceInstance } from "@/lib/device-instances/runtime";
 import { badRequest, isUniqueConstraintError, isValidWebSocketUrl, notFound } from "@/lib/device-instances/http";
 import { ParameterValidationError, validateParameterValue } from "@/lib/device-instances/parameters";
@@ -136,6 +137,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 
   disposeDeviceInstance(id);
   disposeDiagnosticState(id);
+  disposeHardwareTestState(id);
   await prisma.deviceInstance.delete({ where: { id } });
 
   return new NextResponse(null, { status: 204 });

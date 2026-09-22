@@ -64,12 +64,18 @@ enum DeviceConnectionStatus {
   FAULTED
 }
 
-/// Authorization outcome an idTag carries in the local authorization list/cache, mirroring
-/// OCPP 1.6's `AuthorizationStatus` values a charger can decide locally without contacting the CSMS.
+/// Authorization outcome an idTag carries in the local authorization list/cache, mirroring OCPP
+/// 1.6's `AuthorizationStatus` values a charger can decide locally without contacting the CSMS.
+/// Matches `OcppIdTagStatus` (`src/lib/ocpp/remote-command-types.ts`) 1:1 — this table backs both
+/// `rfid.ts`'s local-auth lookup (round 1) and `OcppLocalAuthListStore`'s `SendLocalList`/
+/// `GetLocalListVersion` persistence (round 2's `PrismaLocalAuthListStore`), the same underlying
+/// concept (a real charger's local authorization list) reached from two directions.
 enum LocalAuthEntryStatus {
   ACCEPTED
   BLOCKED
   EXPIRED
+  INVALID
+  CONCURRENT_TX
 }
 
 /// OCPP action queued in a device instance's offline outbox (see `DeviceInstanceOutboxMessage`).
@@ -86,16 +92,16 @@ enum OutboxAction {
 /// created from. Holds identity, connector topology, and the typed parameter schema
 /// describing every configurable field shown across the device's settings tabs.
 model DeviceModel {
-  id           String   @id @default(cuid())
+  id           String              @id @default(cuid())
   manufacturer String
   brand        String?
   model        String
   ocppProtocol OcppProtocolVersion
   description  String?
 
-  connectors  DeviceModelConnector[]
-  parameters  DeviceModelParameter[]
-  instances   DeviceInstance[]
+  connectors DeviceModelConnector[]
+  parameters DeviceModelParameter[]
+  instances  DeviceInstance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -105,16 +111,16 @@ model DeviceModel {
 
 /// One physical connector (EVSE + connector index) on a device model, e.g. "Plug A".
 model DeviceModelConnector {
-  id            String @id @default(cuid())
+  id            String      @id @default(cuid())
   deviceModelId String
   deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
 
   /// 1-based EVSE index, matching the OCPP evseId/connector numbering the device boots with.
-  evseIndex Int
+  evseIndex      Int
   /// 1-based connector index within the EVSE (almost always 1 for single-connector EVSEs).
   connectorIndex Int
   /// Human label as shown on the device, e.g. "Plug A".
-  label String?
+  label          String?
 
   connectorType ConnectorType
   powerType     PowerType
@@ -134,7 +140,7 @@ model DeviceModelConnector {
 /// surface without new tables. `defaultValue` is stored as text and interpreted per
 /// `valueType`; `enumOptions` is populated only when `valueType` is ENUM.
 model DeviceModelParameter {
-  id            String @id @default(cuid())
+  id            String      @id @default(cuid())
   deviceModelId String
   deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
 
@@ -155,7 +161,7 @@ model DeviceModelParameter {
   maxValue     Float?
 
   description String?
-  sortOrder   Int    @default(0)
+  sortOrder   Int     @default(0)
 
   instanceValues DeviceInstanceParameter[]
 
@@ -170,7 +176,7 @@ model DeviceModelParameter {
 /// (charge point id), CSMS OCPP WebSocket URL, live connection status, and its own copy
 /// of the model's parameter values (seeded from the model's defaults, then editable).
 model DeviceInstance {
-  id            String @id @default(cuid())
+  id            String      @id @default(cuid())
   deviceModelId String
   deviceModel   DeviceModel @relation(fields: [deviceModelId], references: [id], onDelete: Cascade)
 
@@ -189,7 +195,7 @@ model DeviceInstance {
   /// goes through a real Authorize/StartTransaction instead (see `src/lib/device-instances/rfid.ts`).
   masterCardIdTag String?
 
-  status DeviceConnectionStatus @default(DISCONNECTED)
+  status          DeviceConnectionStatus @default(DISCONNECTED)
   /// Human-readable detail for the current status, e.g. an error message when FAULTED.
   statusReason    String?
   lastConnectedAt DateTime?
@@ -200,12 +206,30 @@ model DeviceInstance {
   /// of leaving connectors stuck `Unavailable` forever — see `maintenance.ts::resolveStaleFirmwareUpgrade`.
   firmwareUpgradeStartedAt DateTime?
 
-  parameters       DeviceInstanceParameter[]
-  events           DeviceInstanceEvent[]
-  sessions         DeviceInstanceSession[]
-  connectorStates  DeviceInstanceConnectorState[]
-  localAuthEntries DeviceInstanceLocalAuthEntry[]
-  outboxMessages   DeviceInstanceOutboxMessage[]
+  /// Persisted toggle state for the diagnostics screen's instance-level fault-injection flags
+  /// (issue #4) — `{ overall: OverallHealth, modules: HealthStatus[] }`, written by
+  /// `diagnostics.ts`. Previously 100% in-memory (a `globalThis` Map); only the toggled
+  /// booleans/enums live here — jittered numeric readouts stay ephemeral/recomputed on read.
+  diagnosticsInstanceState  Json?
+  /// Persisted toggle state for the hardware-test screen's instance-level settings (issue #16) —
+  /// `{ chargingTest: {...}, pile: {...} }`, written by `hardware-test-state.ts`. Same rationale
+  /// as `diagnosticsInstanceState`.
+  hardwareTestInstanceState Json?
+
+  /// `OcppLocalAuthListStore`'s version counter (`SendLocalList`/`GetLocalListVersion`) — see
+  /// `PrismaLocalAuthListStore`. Not used by `rfid.ts`'s own local-auth lookup, only the
+  /// OCPP-protocol-facing side of `DeviceInstanceLocalAuthEntry`.
+  localAuthListVersion Int @default(0)
+
+  parameters                DeviceInstanceParameter[]
+  events                    DeviceInstanceEvent[]
+  sessions                  DeviceInstanceSession[]
+  connectorStates           DeviceInstanceConnectorState[]
+  connectorDiagnosticStates DeviceInstanceConnectorDiagnosticState[]
+  localAuthEntries          DeviceInstanceLocalAuthEntry[]
+  outboxMessages            DeviceInstanceOutboxMessage[]
+  reservations              DeviceInstanceReservation[]
+  chargingProfiles          DeviceInstanceChargingProfile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -229,11 +253,61 @@ model DeviceInstanceLocalAuthEntry {
   status LocalAuthEntryStatus @default(ACCEPTED)
 
   cacheExpiryDateTime DateTime?
+  /// The idTag whose authorization this one inherits when presented (OCPP's `idTagInfo.parentIdTag`),
+  /// e.g. a fleet card authorized under its fleet's parent id. Only meaningful for
+  /// `PrismaLocalAuthListStore`-written entries (`SendLocalList`); `rfid.ts`'s own lookup ignores it.
+  parentIdTag         String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([deviceInstanceId, idTag])
+  @@index([deviceInstanceId])
+}
+
+/// Persisted `ReserveNow`/`CancelReservation` state (see `OcppReservationStore`,
+/// `PrismaReservationStore`) — survives a restart, unlike the expiry *timer* itself
+/// (`src/lib/ocpp/reservation.ts` keeps that in-memory/runtime-only by design; a restart with a
+/// still-valid reservation row here just won't auto-expire until the process re-arms it, which
+/// this round doesn't implement — see AUDIT-state.md's round-2 addendum).
+model DeviceInstanceReservation {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  reservationId Int
+  connectorId   Int
+  idTag         String
+  parentIdTag   String?
+  expiryDate    DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, reservationId])
+  @@index([deviceInstanceId])
+}
+
+/// Persisted `SetChargingProfile`/`ClearChargingProfile` state (see `OcppChargingProfileStore`,
+/// `PrismaChargingProfileStore`), keyed by `chargingProfileId`. `profile` holds the full raw
+/// `csChargingProfiles` object as JSON — `ClearChargingProfile`'s id/connectorId/purpose/
+/// stackLevel filtering logic stays in `src/lib/ocpp/charging-profile.ts`, operating over
+/// whatever a store's `list()` returns.
+model DeviceInstanceChargingProfile {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  chargingProfileId Int
+  connectorId       Int
+  profile           Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, chargingProfileId])
   @@index([deviceInstanceId])
 }
 
@@ -252,7 +326,7 @@ model DeviceInstanceOutboxMessage {
   /// The OCPP call payload, exactly as it would be sent via `callOcpp(deviceInstanceId, action, payload)`.
   payload Json
 
-  attempts  Int      @default(0)
+  attempts  Int     @default(0)
   lastError String?
 
   createdAt DateTime @default(now())
@@ -372,12 +446,12 @@ model DeviceInstanceConnectorState {
 
   /// Mirrors `OcppChargePointStatus` loosely; kept as a string so this table doesn't need a
   /// migration every time the OCPP status enum grows.
-  status String @default("Available")
+  status String  @default("Available")
   /// Manual per-connector lock, toggled from the Lock screen; mirrors `UnlockConnector` but
   /// locally triggerable (issue #14), independent of the CSMS-initiated path from issue #10.
   locked Boolean @default(false)
 
-  activeIdTag        String?
+  activeIdTag         String?
   activeTransactionId Int?
   activeStartedAt     DateTime?
   activeChargeRateKw  Float?
@@ -392,10 +466,38 @@ model DeviceInstanceConnectorState {
   /// (the RFID-simulation flow's non-master-card path — see `src/lib/device-instances/rfid.ts`),
   /// as opposed to the purely-local simulation. Tells `stopChargingSession` whether it also needs
   /// to send a real `StopTransaction` so the CSMS's transaction record doesn't dangle open.
-  activeIsRemote Boolean @default(false)
+  activeIsRemote      Boolean   @default(false)
 
   /// Monotonic per-connector counter used to mint `activeTransactionId` values locally.
   transactionCounter Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceInstanceId, connectorId])
+}
+
+/// Per-connector toggle state for the diagnostics and hardware-test screens (issues #4/#16),
+/// persisted so a restart doesn't lose fault-injection flags or hardware-test toggle positions —
+/// previously 100% in-memory (`diagnostics.ts`'s and `hardware-test-state.ts`'s own separate
+/// `globalThis` Maps). Deliberately a separate table from `DeviceInstanceConnectorState` (which
+/// tracks live session/lock state, not fault-injection/test-panel toggles) rather than extending
+/// it. Jittered numeric readouts (temperatures, voltages, ...) stay ephemeral/recomputed on
+/// read — only the toggled booleans/enums live here, as loosely-typed JSON so this table doesn't
+/// need a migration every time either module's toggle-field set grows.
+model DeviceInstanceConnectorDiagnosticState {
+  id String @id @default(cuid())
+
+  deviceInstanceId String
+  deviceInstance   DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+
+  connectorId Int
+
+  /// `diagnostics.ts`'s per-plug `InterfaceBoardReading` toggle fields (seccCommunication,
+  /// meterCommunication, interfaceBoardCommunication, fuseStatus, km1Status, km2Status,
+  /// plcErrorCode, evErrorCode).
+  diagnosticsToggles  Json?
+  /// `hardware-test-state.ts`'s per-plug toggle fields (outputRunning, auxPowerMode, lockStatus).
+  hardwareTestToggles Json?
 
   updatedAt DateTime @updatedAt
 

@@ -23,7 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     plugOutputCurrents[connectorId] = await getPlugOutputCurrent(id, connectorId);
   }
 
-  return NextResponse.json({ modules: getCommunicationModules(id), plugOutputCurrents });
+  return NextResponse.json({ modules: await getCommunicationModules(id), plugOutputCurrents });
 }
 
 interface PatchBody {
@@ -51,7 +51,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   try {
-    const modules = setCommunicationModuleField(id, body.moduleIndex, body.value);
+    const modules = await setCommunicationModuleField(id, body.moduleIndex, body.value);
     return NextResponse.json({ modules });
   } catch (err) {
     if (err instanceof RangeError) return badRequest(err.message, "moduleIndex");
