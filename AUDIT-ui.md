@@ -146,3 +146,89 @@ whole component-testing stack felt like more than this bug-fixing pass should ta
 unilaterally, so I added a `.test.ts` unit test for the one new pure helper function instead
 (`orderConnectorsByEvse`), consistent with the existing `src/lib/device-instances/__tests__/`
 style.
+
+## Round 2 addendum
+
+Merged `agent/integration` (clean, no conflicts — see `AUDIT-integration.md` for what it
+resolved, notably the same connector-status split flagged as finding #3 above, for the
+remote-start/stop direction). This round: set up the component-testing stack finding #2 called
+for as future work, and added component tests for the round-1 changes plus two more
+CSMS-traffic-relevant Home-screen components.
+
+### Component-testing stack
+
+Added `@testing-library/react`, `@testing-library/jest-dom`, and `jsdom` as devDependencies (all
+React 19-compatible). `vitest.config.ts` now defines two `test.projects` (Vitest 3.2's built-in
+project-splitting, each `extends: true` to inherit this file's `resolve.alias`), keyed by
+extension rather than by directory so a lib/route test and a component test for the thing it
+backs can sit side by side in the same `__tests__/` folder:
+
+- `node` project — unchanged, `*.test.ts`, `environment: "node"`.
+- `jsdom` project — new, `*.test.tsx`, `environment: "jsdom"`, with a small `vitest.setup.ts`
+  (loads `@testing-library/jest-dom/vitest` matchers, calls `cleanup()` after each test).
+
+No global test APIs (`globals: true`) were enabled — every new test file explicitly imports
+`describe`/`it`/`expect`/`vi` from `vitest`, matching the existing `.test.ts` style.
+
+### CSMS-URL stale-status fix: now covered
+
+`src/app/api/device-instances/[id]/route.ts` had no tests at all before this round (checked
+first, per the brief). Added
+`src/app/api/device-instances/[id]/__tests__/route.test.ts`, a DB-gated integration test (same
+`describe.skipIf(!process.env.DATABASE_URL)` + `test-helpers.ts` fixture pattern as
+`runtime.test.ts`/`connector-sessions.test.ts`, since the route talks to real Prisma) covering:
+CONNECTED→DISCONNECTED and CONNECTING→DISCONNECTED on a csmsUrl change, no-op when the
+submitted csmsUrl is unchanged, and no-op when the instance was already DISCONNECTED. This
+sandbox still can't reach the docker-mapped Postgres (same limitation `AUDIT-integration.md`
+documented), so these 4 tests skip here; they follow the exact pattern of the ~40 other DB-gated
+tests in the merged suite, which is the established way this repo verifies Prisma-backed code.
+
+### New component tests
+
+- `src/app/instances/[id]/status/__tests__/page.test.tsx` — the per-plug unlock buttons added in
+  round 1 (finding #2): renders a details link + unlock button per connector; only enables
+  unlock for a currently-locked connector; clicking unlock POSTs `{locked:false}` to the right
+  connector's lock endpoint and disables the button once the refetch reflects it. Mocks
+  `next/navigation`'s `useParams` and `global.fetch` (no network/DB needed).
+- `src/components/device-instances/__tests__/ConnectorChargeCard.test.tsx` — the Home screen's
+  per-plug card: `Available` (idle prompt, enabled Charging button, calls `onStartCharging`),
+  `Charging` (idTag + live energy/elapsed-time readout computed from a fixed `now`, calls
+  `onStopCharging`), `Finishing` (falls back to the idle prompt with the Charging button
+  correctly *disabled*, since the component only special-cases `Preparing`/`Charging`/`Faulted`),
+  and `Faulted` (fault message, calls `onClearFault`).
+- `src/components/device-instances/__tests__/HomeHeaderBar.test.tsx` — the Home screen's
+  connection-status control: `CONNECTED`/`CONNECTING` both read as "running" (toggle offers
+  "stop" next), `DISCONNECTED`/`FAULTED` both read as "not running" (toggle offers "start"
+  next), a set `statusReason` appears in the toggle's title, clicking the toggle calls
+  `onToggleConnection`, and the live clock/serial number render from props.
+
+### Pre-existing test-infra gap fixed in passing
+
+Merging in `agent/state`'s work wired `diagnostics.ts`'s `getInterfaceBoardReading`/
+`setInterfaceBoardToggleField`/`setContactorField`/`getPlugOutputCurrent` to a real Prisma lookup
+(`resolveNumericConnectorId`) even for the "instance doesn't exist" fallback case — so 4 of
+`diagnostics.test.ts`'s tests silently started requiring `DATABASE_URL` to be at least
+*configured* (Prisma throws a validation error before attempting any connection if it's unset at
+all), without being wrapped in that file's own `describe.skipIf(!process.env.DATABASE_URL)`
+pattern that its other DB-touching block already uses. This surfaced as 4 failures (not skips)
+running the merged suite in this sandbox. Fixed by gating the two affected `describe` blocks the
+same way — a mechanical, test-only, two-line change following the file's own existing pattern
+(not a logic change, and not `diagnostics.ts` itself), so I made it directly rather than only
+noting it.
+
+### Files touched (round 2)
+
+- `vitest.config.ts`, `vitest.setup.ts` (new) — component-testing stack
+- `package.json`/`package-lock.json` — new devDependencies
+- `src/app/api/device-instances/[id]/__tests__/route.test.ts` (new)
+- `src/app/instances/[id]/status/__tests__/page.test.tsx` (new)
+- `src/components/device-instances/__tests__/ConnectorChargeCard.test.tsx` (new)
+- `src/components/device-instances/__tests__/HomeHeaderBar.test.tsx` (new)
+- `src/lib/device-instances/__tests__/diagnostics.test.ts` (test-only DB-gate fix)
+
+### Test results (round 2)
+
+- `npx vitest run` — 22 files: 13 passed, 9 skipped (all DB-gated, consistent with this
+  sandbox's documented lack of Postgres reachability); 132 tests passed, 49 skipped, 0 failed.
+- `npx tsc --noEmit` — clean.
+- `npm run lint` — clean.

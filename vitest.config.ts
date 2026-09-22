@@ -21,7 +21,27 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
+    // Two projects, split by extension rather than by directory, so a lib/API test (`*.test.ts`)
+    // and a component test for the thing it backs (`*.test.tsx`) can sit side by side in the same
+    // `__tests__/` folder. Both inherit this file's `resolve.alias` etc. via `extends: true`.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          include: ["src/**/*.test.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "jsdom",
+          environment: "jsdom",
+          include: ["src/**/*.test.tsx"],
+          setupFiles: ["./vitest.setup.ts"],
+        },
+      },
+    ],
   },
 });
