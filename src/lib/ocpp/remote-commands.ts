@@ -107,9 +107,90 @@ export function registerRemoteCommandHandlers(
     return value * (1 + (Math.random() * 2 - 1) * JITTER_FRACTION);
   }
 
-  function energyWhSinceStart(state: TransactionSimState, nowMs: number): number {
-    const elapsedHours = Math.max(0, nowMs - state.startedAtMs) / 3_600_000;
-    return state.chargeRateKw * 1_000 * elapsedHours;
+  interface ActiveTxProfileSchedule {
+    chargingRateUnit: "A" | "W";
+    /** Sorted by `startPeriod` ascending; `periods[0].startPeriod` is normalized to 0 (see below). */
+    periods: Array<{ startPeriod: number; limit: number }>;
+  }
+
+  /** `chargingSchedulePeriod.limit`, expressed in `unit` (Amps or Watts), converted to kW. */
+  function limitToKw(limit: number, unit: "A" | "W"): number {
+    return unit === "A" ? (limit * NOMINAL_VOLTAGE_V) / 1_000 : limit / 1_000;
+  }
+
+  /**
+   * The highest-`stackLevel` `TxProfile` currently stored for `connectorId`, if any — per spec,
+   * `SetChargingProfile`'s `TxProfile` purpose is the one that actually limits an ongoing
+   * transaction (`TxDefaultProfile`/`ChargePointMaxProfile` stacking/composition is out of this
+   * pass's scope; see AUDIT-ocpp.md). Normalizes the first period's `startPeriod` to 0, since
+   * this module treats a `TxProfile`'s schedule as relative to the transaction's own start
+   * (the common case for `TxProfile`, whose `chargingProfileKind` is usually `Relative`) rather
+   * than implementing `Absolute`/`Recurring` schedule anchoring.
+   */
+  async function getActiveTxProfileSchedule(connectorId: number): Promise<ActiveTxProfileSchedule | undefined> {
+    const candidates = (await chargingProfileHandlers.listChargingProfiles(connectorId))
+      .filter((entry) => entry.profile.chargingProfilePurpose === "TxProfile")
+      .sort((a, b) => (Number(b.profile.stackLevel) || 0) - (Number(a.profile.stackLevel) || 0));
+
+    const schedule = candidates[0]?.profile.chargingSchedule as
+      | { chargingRateUnit?: unknown; chargingSchedulePeriod?: unknown }
+      | undefined;
+    if (!schedule || (schedule.chargingRateUnit !== "A" && schedule.chargingRateUnit !== "W")) {
+      return undefined;
+    }
+
+    const periods = (Array.isArray(schedule.chargingSchedulePeriod) ? schedule.chargingSchedulePeriod : [])
+      .filter(
+        (period): period is { startPeriod: number; limit: number } =>
+          !!period &&
+          typeof period === "object" &&
+          typeof (period as Record<string, unknown>).startPeriod === "number" &&
+          typeof (period as Record<string, unknown>).limit === "number",
+      )
+      .sort((a, b) => a.startPeriod - b.startPeriod);
+    if (periods.length === 0) return undefined;
+
+    periods[0] = { ...periods[0], startPeriod: 0 };
+    return { chargingRateUnit: schedule.chargingRateUnit, periods };
+  }
+
+  /** The TxProfile schedule's currently-active period's limit (kW) at `elapsedSec` into the transaction. */
+  function activePeriodLimitKw(schedule: ActiveTxProfileSchedule, elapsedSec: number): number {
+    let active = schedule.periods[0];
+    for (const period of schedule.periods) {
+      if (period.startPeriod <= elapsedSec) active = period;
+      else break;
+    }
+    return limitToKw(active.limit, schedule.chargingRateUnit);
+  }
+
+  /** `baseKw` clamped to the active TxProfile's current limit, or `baseKw` unchanged if there's none. */
+  function effectiveChargeRateKwAt(schedule: ActiveTxProfileSchedule | undefined, baseKw: number, elapsedSec: number): number {
+    return schedule ? Math.min(baseKw, activePeriodLimitKw(schedule, elapsedSec)) : baseKw;
+  }
+
+  /**
+   * Total energy (Wh) accumulated since the transaction started, integrating piecewise over the
+   * TxProfile schedule's periods (each clamped to `baseKw`) rather than assuming a single
+   * constant rate for the whole elapsed duration — otherwise a mid-session throttle change would
+   * incorrectly appear to have applied retroactively to energy already accumulated.
+   */
+  function energyWhSinceStart(state: TransactionSimState, nowMs: number, schedule: ActiveTxProfileSchedule | undefined): number {
+    const elapsedSec = Math.max(0, (nowMs - state.startedAtMs) / 1_000);
+    if (!schedule) {
+      return (state.chargeRateKw * 1_000 * elapsedSec) / 3_600;
+    }
+
+    let energyWh = 0;
+    let coveredSec = 0;
+    for (let i = 0; i < schedule.periods.length && coveredSec < elapsedSec; i += 1) {
+      const periodEnd =
+        i + 1 < schedule.periods.length ? Math.min(schedule.periods[i + 1].startPeriod, elapsedSec) : elapsedSec;
+      const rateKw = Math.min(state.chargeRateKw, limitToKw(schedule.periods[i].limit, schedule.chargingRateUnit));
+      energyWh += (rateKw * 1_000 * Math.max(0, periodEnd - coveredSec)) / 3_600;
+      coveredSec = periodEnd;
+    }
+    return energyWh;
   }
 
   /**
@@ -120,10 +201,10 @@ export function registerRemoteCommandHandlers(
    * reports a single zeroed Energy register sample with `context: "Sample.Clock"` and
    * `location: "Outlet"`, which real chargers also do while not charging (see AUDIT-ocpp.md).
    */
-  function buildSampledValues(
+  async function buildSampledValues(
     connectorId: number,
     context: "Sample.Periodic" | "Transaction.End",
-  ): { sampledValue: Record<string, string>[]; meterWh: number } {
+  ): Promise<{ sampledValue: Record<string, string>[]; meterWh: number }> {
     const state = transactionSimState.get(connectorId);
     if (!state) {
       const meterWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
@@ -142,14 +223,19 @@ export function registerRemoteCommandHandlers(
       };
     }
 
-    const meterWh = Math.round(state.meterStartWh + energyWhSinceStart(state, Date.now()));
-    const powerOfferedW = state.chargeRateKw * 1_000;
+    const now = Date.now();
+    const elapsedSec = Math.max(0, (now - state.startedAtMs) / 1_000);
+    const schedule = await getActiveTxProfileSchedule(connectorId);
+    const energyWhDelta = energyWhSinceStart(state, now, schedule);
+    const meterWh = Math.round(state.meterStartWh + energyWhDelta);
+    const effectiveKw = effectiveChargeRateKwAt(schedule, state.chargeRateKw, elapsedSec);
+    const powerOfferedW = effectiveKw * 1_000;
     const powerActiveImportW = Math.min(powerOfferedW, jitter(powerOfferedW));
     const voltageV = jitter(NOMINAL_VOLTAGE_V);
     const currentA = voltageV > 0 ? powerActiveImportW / voltageV : 0;
     const socPercent = Math.min(
       100,
-      Math.round(state.initialSocPercent + (energyWhSinceStart(state, Date.now()) / SIMULATED_BATTERY_CAPACITY_WH) * 100),
+      Math.round(state.initialSocPercent + (energyWhDelta / SIMULATED_BATTERY_CAPACITY_WH) * 100),
     );
 
     return {
@@ -215,7 +301,7 @@ export function registerRemoteCommandHandlers(
 
   async function sendMeterValues(connectorId: number): Promise<void> {
     const entry = activeTransactions.get(connectorId);
-    const { sampledValue } = buildSampledValues(connectorId, "Sample.Periodic");
+    const { sampledValue } = await buildSampledValues(connectorId, "Sample.Periodic");
     const payload: Record<string, unknown> = {
       connectorId,
       meterValue: [{ timestamp: new Date().toISOString(), sampledValue }],
@@ -335,7 +421,7 @@ export function registerRemoteCommandHandlers(
   async function stopTransaction(entry: OcppActiveTransaction, reason: string): Promise<void> {
     activeTransactions.delete(entry.connectorId);
     stopMeterValuesLoop(entry.connectorId);
-    const { sampledValue: finalSampledValue, meterWh: meterStopWh } = buildSampledValues(
+    const { sampledValue: finalSampledValue, meterWh: meterStopWh } = await buildSampledValues(
       entry.connectorId,
       "Transaction.End",
     );

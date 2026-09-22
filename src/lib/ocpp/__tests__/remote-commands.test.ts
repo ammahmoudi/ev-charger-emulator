@@ -613,6 +613,184 @@ describe("registerRemoteCommandHandlers", () => {
     });
   });
 
+  describe("SetChargingProfile throttling", () => {
+    let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let mockNow = 0;
+
+    function mockDateNow(startMs: number): void {
+      mockNow = startMs;
+      nowSpy = vi.spyOn(Date, "now").mockImplementation(() => mockNow);
+    }
+
+    afterEach(() => {
+      nowSpy?.mockRestore();
+      nowSpy = undefined;
+    });
+
+    async function acceptStart(idTag: string, messageId: string, transactionId: number): Promise<void> {
+      sendCall("RemoteStartTransaction", { connectorId: 1, idTag }, messageId);
+      const frames = await collectFrames(3);
+      const startTxCall = findByAction(frames, "StartTransaction");
+      const [, startTxMessageId] = startTxCall as [number, string, string, Record<string, unknown>];
+      serverSocket.send(
+        JSON.stringify([3, startTxMessageId, { transactionId, idTagInfo: { status: "Accepted" } }]),
+      );
+      await queue.next(); // Charging StatusNotification
+    }
+
+    async function setTxProfile(profile: Record<string, unknown>, messageId: string): Promise<void> {
+      sendCall("SetChargingProfile", { connectorId: 1, csChargingProfiles: profile }, messageId);
+      const [, , result] = await queue.next();
+      expect(result).toEqual({ status: "Accepted" });
+    }
+
+    async function triggerMeterValues(messageId: string): Promise<Array<Record<string, string>>> {
+      sendCall("TriggerMessage", { requestedMessage: "MeterValues", connectorId: 1 }, messageId);
+      await queue.next(); // CALLRESULT
+      const [, , , payload] = await queue.next();
+      return (payload as { meterValue: Array<{ sampledValue: Array<Record<string, string>> }> }).meterValue[0]
+        .sampledValue;
+    }
+
+    it("clamps to a TxProfile limit expressed in Watts, below the device's rated power", async () => {
+      mockDateNow(1_800_000_000_000);
+      await acceptStart("TAG1", "throttle-w-start", 300);
+      await setTxProfile(
+        {
+          chargingProfileId: 10,
+          stackLevel: 0,
+          chargingProfilePurpose: "TxProfile",
+          chargingProfileKind: "Absolute",
+          chargingSchedule: {
+            chargingRateUnit: "W",
+            chargingSchedulePeriod: [{ startPeriod: 0, limit: 10_000 }],
+          },
+        },
+        "throttle-w-profile",
+      );
+
+      const sampledValue = await triggerMeterValues("throttle-w-meter");
+      const offered = sampledValue.find((sv) => sv.measurand === "Power.Offered");
+      const active = sampledValue.find((sv) => sv.measurand === "Power.Active.Import");
+      expect(offered?.value).toBe("10000.0");
+      expect(Number(active?.value)).toBeLessThanOrEqual(10_000);
+
+      // 1 simulated hour at the throttled 10kW rate → 10,000 Wh, not the unthrottled 30,000 Wh.
+      mockNow += 3_600_000;
+      sendCall("RemoteStopTransaction", { transactionId: 300 }, "throttle-w-stop");
+      const stopFrames = await collectFrames(2);
+      const stopTxCall = findByAction(stopFrames, "StopTransaction");
+      const [, , , stopPayload] = stopTxCall as [number, string, string, Record<string, unknown>];
+      expect(stopPayload).toMatchObject({ meterStop: 10_000 });
+    });
+
+    it("clamps to a TxProfile limit expressed in Amps, converted via the nominal voltage constant", async () => {
+      mockDateNow(1_800_000_000_000);
+      await acceptStart("TAG1", "throttle-a-start", 301);
+      await setTxProfile(
+        {
+          chargingProfileId: 11,
+          stackLevel: 0,
+          chargingProfilePurpose: "TxProfile",
+          chargingProfileKind: "Absolute",
+          chargingSchedule: {
+            chargingRateUnit: "A",
+            // 20A * 400V (this module's nominal voltage constant) = 8000W = 8kW.
+            chargingSchedulePeriod: [{ startPeriod: 0, limit: 20 }],
+          },
+        },
+        "throttle-a-profile",
+      );
+
+      const sampledValue = await triggerMeterValues("throttle-a-meter");
+      const offered = sampledValue.find((sv) => sv.measurand === "Power.Offered");
+      expect(offered?.value).toBe("8000.0");
+
+      mockNow += 3_600_000;
+      sendCall("RemoteStopTransaction", { transactionId: 301 }, "throttle-a-stop");
+      const stopFrames = await collectFrames(2);
+      const stopTxCall = findByAction(stopFrames, "StopTransaction");
+      const [, , , stopPayload] = stopTxCall as [number, string, string, Record<string, unknown>];
+      expect(stopPayload).toMatchObject({ meterStop: 8_000 });
+    });
+
+    it("does not throttle below the device's rated power when the TxProfile limit is higher", async () => {
+      mockDateNow(1_800_000_000_000);
+      await acceptStart("TAG1", "throttle-noop-start", 302);
+      await setTxProfile(
+        {
+          chargingProfileId: 12,
+          stackLevel: 0,
+          chargingProfilePurpose: "TxProfile",
+          chargingProfileKind: "Absolute",
+          chargingSchedule: {
+            chargingRateUnit: "W",
+            // Well above the 30kW test-default rated power fallback — should have no effect.
+            chargingSchedulePeriod: [{ startPeriod: 0, limit: 100_000 }],
+          },
+        },
+        "throttle-noop-profile",
+      );
+
+      const sampledValue = await triggerMeterValues("throttle-noop-meter");
+      const offered = sampledValue.find((sv) => sv.measurand === "Power.Offered");
+      expect(offered?.value).toBe("30000.0");
+    });
+
+    it("integrates energy piecewise across a schedule's changing periods, not the final period's rate retroactively", async () => {
+      mockDateNow(1_800_000_000_000);
+      await acceptStart("TAG1", "throttle-piecewise-start", 303);
+      // Set immediately (elapsedSec ~ 0) since this module treats a TxProfile's schedule as
+      // relative to the transaction's own start (see AUDIT-ocpp.md) — the whole elapsed duration
+      // is integrated against this schedule regardless of exactly when SetChargingProfile arrived.
+      await setTxProfile(
+        {
+          chargingProfileId: 13,
+          stackLevel: 0,
+          chargingProfilePurpose: "TxProfile",
+          chargingProfileKind: "Relative",
+          chargingSchedule: {
+            chargingRateUnit: "A",
+            chargingSchedulePeriod: [
+              { startPeriod: 0, limit: 20 }, // 8kW for the first half hour
+              { startPeriod: 1_800, limit: 10 }, // 4kW for the second half hour
+            ],
+          },
+        },
+        "throttle-piecewise-profile",
+      );
+
+      mockNow += 3_600_000; // 1 hour total: 0.5h @ 8kW + 0.5h @ 4kW = 4000 + 2000 = 6000 Wh
+      sendCall("RemoteStopTransaction", { transactionId: 303 }, "throttle-piecewise-stop");
+      const stopFrames = await collectFrames(2);
+      const stopTxCall = findByAction(stopFrames, "StopTransaction");
+      const [, , , stopPayload] = stopTxCall as [number, string, string, Record<string, unknown>];
+      expect(stopPayload).toMatchObject({ meterStop: 6_000 });
+    });
+
+    it("ignores TxDefaultProfile/ChargePointMaxProfile purposes (only TxProfile throttles)", async () => {
+      mockDateNow(1_800_000_000_000);
+      await acceptStart("TAG1", "throttle-purpose-start", 304);
+      await setTxProfile(
+        {
+          chargingProfileId: 14,
+          stackLevel: 0,
+          chargingProfilePurpose: "TxDefaultProfile",
+          chargingProfileKind: "Absolute",
+          chargingSchedule: {
+            chargingRateUnit: "W",
+            chargingSchedulePeriod: [{ startPeriod: 0, limit: 5_000 }],
+          },
+        },
+        "throttle-purpose-profile",
+      );
+
+      const sampledValue = await triggerMeterValues("throttle-purpose-meter");
+      const offered = sampledValue.find((sv) => sv.measurand === "Power.Offered");
+      expect(offered?.value).toBe("30000.0");
+    });
+  });
+
   describe("ReserveNow / CancelReservation", () => {
     /** Sends ReserveNow and drains its CALLRESULT + the deferred Reserved StatusNotification. */
     async function reserve(connectorId: number, idTag: string, reservationId: number, messageId: string): Promise<void> {
