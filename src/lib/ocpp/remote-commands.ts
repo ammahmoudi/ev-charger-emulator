@@ -24,7 +24,6 @@ const DEFAULT_SIMULATED_CHARGE_RATE_KW = 30;
 const RATED_POWER_CONFIG_KEY = "evChargerRatedPowerKw";
 const METER_INTERVAL_CONFIG_KEY = "MeterValueSampleInterval";
 const DEFAULT_METER_INTERVAL_SEC = 60;
-const MS_PER_HOUR = 3_600_000;
 /** Nominal DC bus voltage used for simulated Voltage/Current samples. */
 const NOMINAL_VOLTAGE_V = 400;
 /** Assumed EV battery capacity used to derive a plausible simulated SoC curve. */
@@ -72,11 +71,12 @@ export function registerRemoteCommandHandlers(
   const meterRegisterWh = new Map<number, number>();
   const transactionSimState = new Map<number, TransactionSimState>();
 
-  const reservationHandlers = createReservationHandlers(session);
+  const reservationHandlers = createReservationHandlers(session, deps.reservationStore);
   const chargingProfileHandlers = createChargingProfileHandlers(
     (connectorId) => session.getConnectorStatus(connectorId) !== undefined,
+    deps.chargingProfileStore,
   );
-  const localAuthListHandlers = createLocalAuthListHandlers();
+  const localAuthListHandlers = createLocalAuthListHandlers(deps.localAuthListStore);
   const handleDataTransfer = createDataTransferHandler(deps.dataTransferHandlers);
   const firmwareHandlers = createFirmwareHandlers(client, {
     downloadDelayMs: deps.firmwareDownloadDelayMs,
@@ -108,7 +108,7 @@ export function registerRemoteCommandHandlers(
   }
 
   function energyWhSinceStart(state: TransactionSimState, nowMs: number): number {
-    const elapsedHours = Math.max(0, nowMs - state.startedAtMs) / MS_PER_HOUR;
+    const elapsedHours = Math.max(0, nowMs - state.startedAtMs) / 3_600_000;
     return state.chargeRateKw * 1_000 * elapsedHours;
   }
 
@@ -296,7 +296,9 @@ export function registerRemoteCommandHandlers(
     }
   }
 
-  function handleRemoteStartTransaction(payload: Record<string, unknown>): { status: "Accepted" | "Rejected" } {
+  async function handleRemoteStartTransaction(
+    payload: Record<string, unknown>,
+  ): Promise<{ status: "Accepted" | "Rejected" }> {
     const idTag = payload.idTag;
     if (typeof idTag !== "string" || idTag.length === 0) {
       throw new OcppCallError("PropertyConstraintViolation", "idTag is required");
@@ -313,7 +315,7 @@ export function registerRemoteCommandHandlers(
       return { status: "Rejected" };
     }
     if (info.status === "Reserved") {
-      if (!reservationHandlers.consumeReservation(connectorId, idTag)) {
+      if (!(await reservationHandlers.consumeReservation(connectorId, idTag))) {
         return { status: "Rejected" };
       }
     } else if (info.status !== "Available") {
@@ -321,7 +323,7 @@ export function registerRemoteCommandHandlers(
     }
 
     if (payload.chargingProfile) {
-      chargingProfileHandlers.tryStoreProfile(connectorId, payload.chargingProfile);
+      await chargingProfileHandlers.tryStoreProfile(connectorId, payload.chargingProfile);
     }
 
     // Deferred to a macrotask so the RemoteStartTransaction.conf is always sent before
@@ -352,6 +354,7 @@ export function registerRemoteCommandHandlers(
     } catch (err) {
       onError(toError(err));
     }
+
     session.setConnectorStatus(entry.connectorId, "Finishing");
     session.setConnectorStatus(entry.connectorId, "Available");
 

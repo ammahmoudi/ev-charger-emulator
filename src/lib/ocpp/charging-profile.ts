@@ -1,6 +1,7 @@
 import { OcppCallError } from "./errors";
 import type {
   OcppChargingProfileEntry,
+  OcppChargingProfileStore,
   OcppClearChargingProfileStatus,
   OcppSetChargingProfileStatus,
 } from "./remote-command-types";
@@ -30,28 +31,48 @@ function isValidChargingProfile(profile: unknown): profile is Record<string, unk
 }
 
 export interface ChargingProfileHandlers {
-  handleSetChargingProfile(payload: Record<string, unknown>): { status: OcppSetChargingProfileStatus };
-  handleClearChargingProfile(payload: Record<string, unknown>): { status: OcppClearChargingProfileStatus };
+  handleSetChargingProfile(payload: Record<string, unknown>): Promise<{ status: OcppSetChargingProfileStatus }>;
+  handleClearChargingProfile(payload: Record<string, unknown>): Promise<{ status: OcppClearChargingProfileStatus }>;
   /** Best-effort store of a profile without the CALLERROR-throwing validation (used for `RemoteStartTransaction.chargingProfile`). */
-  tryStoreProfile(connectorId: number, profile: unknown): void;
-  listChargingProfiles(connectorId?: number): OcppChargingProfileEntry[];
+  tryStoreProfile(connectorId: number, profile: unknown): Promise<void>;
+  listChargingProfiles(connectorId?: number): Promise<OcppChargingProfileEntry[]>;
+}
+
+/** Default {@link OcppChargingProfileStore}: an in-memory `Map`, used when no store is injected. */
+function createInMemoryChargingProfileStore(): OcppChargingProfileStore {
+  const profiles = new Map<number, OcppChargingProfileEntry>();
+  return {
+    async list() {
+      return Array.from(profiles.values());
+    },
+    async set(chargingProfileId, entry) {
+      profiles.set(chargingProfileId, entry);
+    },
+    async delete(chargingProfileId) {
+      profiles.delete(chargingProfileId);
+    },
+  };
 }
 
 /**
- * Registers `SetChargingProfile`/`ClearChargingProfile` handling: validates and stores profiles
- * keyed by `chargingProfileId` (per the OCPP 1.6 `SetChargingProfile`/`ClearChargingProfile`
- * schemas), and supports `ClearChargingProfile`'s optional `id`/`connectorId`/
- * `chargingProfilePurpose`/`stackLevel` filters. Stored profiles aren't yet fed back into the
- * simulated charge rate — see `AUDIT-ocpp.md`'s "known limitations".
+ * Registers `SetChargingProfile`/`ClearChargingProfile` handling: validates profiles (per the
+ * OCPP 1.6 `SetChargingProfile`/`ClearChargingProfile` schemas) and delegates storage (keyed by
+ * `chargingProfileId`) to `store` (in-memory by default; a caller may inject a Prisma-backed one
+ * — see `OcppChargingProfileStore`). `ClearChargingProfile`'s `id`/`connectorId`/
+ * `chargingProfilePurpose`/`stackLevel` filtering happens here, over the store's full list, so
+ * every store implementation only needs plain list/set/delete.
  */
-export function createChargingProfileHandlers(isKnownConnectorId: (connectorId: number) => boolean): ChargingProfileHandlers {
-  const profiles = new Map<number, OcppChargingProfileEntry>();
-
-  function storeProfile(connectorId: number, profile: Record<string, unknown>): void {
-    profiles.set(profile.chargingProfileId as number, { connectorId, profile });
+export function createChargingProfileHandlers(
+  isKnownConnectorId: (connectorId: number) => boolean,
+  store: OcppChargingProfileStore = createInMemoryChargingProfileStore(),
+): ChargingProfileHandlers {
+  async function storeProfile(connectorId: number, profile: Record<string, unknown>): Promise<void> {
+    await store.set(profile.chargingProfileId as number, { connectorId, profile });
   }
 
-  function handleSetChargingProfile(payload: Record<string, unknown>): { status: OcppSetChargingProfileStatus } {
+  async function handleSetChargingProfile(
+    payload: Record<string, unknown>,
+  ): Promise<{ status: OcppSetChargingProfileStatus }> {
     const { connectorId, csChargingProfiles } = payload;
     if (typeof connectorId !== "number") {
       throw new OcppCallError("PropertyConstraintViolation", "connectorId is required");
@@ -67,23 +88,27 @@ export function createChargingProfileHandlers(isKnownConnectorId: (connectorId: 
       return { status: "Rejected" };
     }
 
-    storeProfile(connectorId, csChargingProfiles);
+    await storeProfile(connectorId, csChargingProfiles);
     return { status: "Accepted" };
   }
 
-  function handleClearChargingProfile(payload: Record<string, unknown>): { status: OcppClearChargingProfileStatus } {
+  async function handleClearChargingProfile(
+    payload: Record<string, unknown>,
+  ): Promise<{ status: OcppClearChargingProfileStatus }> {
     const id = typeof payload.id === "number" ? payload.id : undefined;
     const connectorId = typeof payload.connectorId === "number" ? payload.connectorId : undefined;
     const purpose = typeof payload.chargingProfilePurpose === "string" ? payload.chargingProfilePurpose : undefined;
     const stackLevel = typeof payload.stackLevel === "number" ? payload.stackLevel : undefined;
 
+    const all = await store.list();
     let removed = 0;
-    for (const [key, entry] of profiles) {
-      if (id !== undefined && key !== id) continue;
+    for (const entry of all) {
+      const entryId = entry.profile.chargingProfileId as number;
+      if (id !== undefined && entryId !== id) continue;
       if (connectorId !== undefined && entry.connectorId !== connectorId) continue;
       if (purpose !== undefined && entry.profile.chargingProfilePurpose !== purpose) continue;
       if (stackLevel !== undefined && entry.profile.stackLevel !== stackLevel) continue;
-      profiles.delete(key);
+      await store.delete(entryId);
       removed += 1;
     }
     return { status: removed > 0 ? "Accepted" : "Unknown" };
@@ -92,10 +117,12 @@ export function createChargingProfileHandlers(isKnownConnectorId: (connectorId: 
   return {
     handleSetChargingProfile,
     handleClearChargingProfile,
-    tryStoreProfile: (connectorId, profile) => {
-      if (isValidChargingProfile(profile)) storeProfile(connectorId, profile);
+    tryStoreProfile: async (connectorId, profile) => {
+      if (isValidChargingProfile(profile)) await storeProfile(connectorId, profile);
     },
-    listChargingProfiles: (connectorId) =>
-      Array.from(profiles.values()).filter((entry) => connectorId === undefined || entry.connectorId === connectorId),
+    listChargingProfiles: async (connectorId) => {
+      const all = await store.list();
+      return connectorId === undefined ? all : all.filter((entry) => entry.connectorId === connectorId);
+    },
   };
 }

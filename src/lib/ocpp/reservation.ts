@@ -1,10 +1,11 @@
 import { OcppCallError } from "./errors";
 import type { OcppChargePointSession } from "./session";
-import type { OcppCancelReservationStatus, OcppReservation, OcppReserveNowStatus } from "./remote-command-types";
-
-interface TrackedReservation extends OcppReservation {
-  timer: ReturnType<typeof setTimeout>;
-}
+import type {
+  OcppCancelReservationStatus,
+  OcppReservation,
+  OcppReservationStore,
+  OcppReserveNowStatus,
+} from "./remote-command-types";
 
 /**
  * `setTimeout`'s delay is a 32-bit signed integer internally; a longer delay overflows and
@@ -15,16 +16,35 @@ interface TrackedReservation extends OcppReservation {
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export interface ReservationHandlers {
-  handleReserveNow(payload: Record<string, unknown>): { status: OcppReserveNowStatus };
-  handleCancelReservation(payload: Record<string, unknown>): { status: OcppCancelReservationStatus };
+  handleReserveNow(payload: Record<string, unknown>): Promise<{ status: OcppReserveNowStatus }>;
+  handleCancelReservation(payload: Record<string, unknown>): Promise<{ status: OcppCancelReservationStatus }>;
   /**
    * If `connectorId` is currently `Reserved` for `idTag` (or its `parentIdTag`), consumes
    * (removes) that reservation and returns `true` — used by `RemoteStartTransaction` handling
    * so a reservation can actually be redeemed instead of permanently blocking the connector.
    */
-  consumeReservation(connectorId: number, idTag: string): boolean;
-  listReservations(): OcppReservation[];
+  consumeReservation(connectorId: number, idTag: string): Promise<boolean>;
+  listReservations(): Promise<OcppReservation[]>;
   dispose(): void;
+}
+
+/** Default {@link OcppReservationStore}: an in-memory `Map`, used when no store is injected. */
+function createInMemoryReservationStore(): OcppReservationStore {
+  const reservations = new Map<number, OcppReservation>();
+  return {
+    async list() {
+      return Array.from(reservations.values());
+    },
+    async get(reservationId) {
+      return reservations.get(reservationId);
+    },
+    async set(reservation) {
+      reservations.set(reservation.reservationId, reservation);
+    },
+    async delete(reservationId) {
+      reservations.delete(reservationId);
+    },
+  };
 }
 
 /**
@@ -33,18 +53,23 @@ export interface ReservationHandlers {
  * (`Faulted` for a faulted connector, `Occupied` for anything else non-`Available`, `Rejected`
  * for an unknown connector). `connectorId: 0` reserves any currently `Available` connector, per
  * the spec's `ReserveConnectorZeroSupported` behavior.
+ *
+ * Reservation *data* is delegated to `store` (in-memory by default; a caller may inject a
+ * Prisma-backed one — see `OcppReservationStore`). The expiry *timer* is always kept here,
+ * in-memory, regardless of store — it's runtime-only and isn't meaningful to persist.
  */
-export function createReservationHandlers(session: OcppChargePointSession): ReservationHandlers {
-  const reservations = new Map<number, TrackedReservation>();
+export function createReservationHandlers(
+  session: OcppChargePointSession,
+  store: OcppReservationStore = createInMemoryReservationStore(),
+): ReservationHandlers {
+  const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
-  function toPublic(reservation: TrackedReservation): OcppReservation {
-    return {
-      reservationId: reservation.reservationId,
-      connectorId: reservation.connectorId,
-      idTag: reservation.idTag,
-      parentIdTag: reservation.parentIdTag,
-      expiryDate: reservation.expiryDate,
-    };
+  function clearTimer(reservationId: number): void {
+    const timer = timers.get(reservationId);
+    if (timer) {
+      clearTimeout(timer);
+      timers.delete(reservationId);
+    }
   }
 
   function releaseConnectorIfReserved(connectorId: number): void {
@@ -54,34 +79,32 @@ export function createReservationHandlers(session: OcppChargePointSession): Rese
     }
   }
 
-  function removeReservation(reservationId: number): TrackedReservation | undefined {
-    const reservation = reservations.get(reservationId);
+  async function removeReservation(reservationId: number): Promise<OcppReservation | undefined> {
+    const reservation = await store.get(reservationId);
     if (!reservation) return undefined;
-    clearTimeout(reservation.timer);
-    reservations.delete(reservationId);
+    clearTimer(reservationId);
+    await store.delete(reservationId);
     return reservation;
   }
 
-  function expireReservation(reservationId: number): void {
-    const reservation = reservations.get(reservationId);
+  async function expireReservation(reservationId: number): Promise<void> {
+    const reservation = await store.get(reservationId);
     if (!reservation) return;
-    reservations.delete(reservationId);
+    timers.delete(reservationId);
+    await store.delete(reservationId);
     releaseConnectorIfReserved(reservation.connectorId);
   }
 
-  function scheduleExpiry(reservationId: number, expiryMs: number): ReturnType<typeof setTimeout> {
+  function scheduleExpiry(reservationId: number, expiryMs: number): void {
     const remainingMs = Math.max(0, expiryMs - Date.now());
-    if (remainingMs > MAX_TIMEOUT_MS) {
-      return setTimeout(() => {
-        const reservation = reservations.get(reservationId);
-        if (!reservation) return;
-        reservation.timer = scheduleExpiry(reservationId, expiryMs);
-      }, MAX_TIMEOUT_MS);
-    }
-    return setTimeout(() => expireReservation(reservationId), remainingMs);
+    const timer =
+      remainingMs > MAX_TIMEOUT_MS
+        ? setTimeout(() => scheduleExpiry(reservationId, expiryMs), MAX_TIMEOUT_MS)
+        : setTimeout(() => void expireReservation(reservationId), remainingMs);
+    timers.set(reservationId, timer);
   }
 
-  function handleReserveNow(payload: Record<string, unknown>): { status: OcppReserveNowStatus } {
+  async function handleReserveNow(payload: Record<string, unknown>): Promise<{ status: OcppReserveNowStatus }> {
     const { connectorId, expiryDate, idTag, reservationId, parentIdTag } = payload;
     if (
       typeof connectorId !== "number" ||
@@ -112,38 +135,40 @@ export function createReservationHandlers(session: OcppChargePointSession): Rese
       targetConnectorId = connectorId;
     }
 
-    removeReservation(reservationId);
-    const timer = scheduleExpiry(reservationId, expiryMs);
-    reservations.set(reservationId, {
+    await removeReservation(reservationId);
+    await store.set({
       reservationId,
       connectorId: targetConnectorId,
       idTag,
       parentIdTag: typeof parentIdTag === "string" ? parentIdTag : undefined,
       expiryDate,
-      timer,
     });
+    scheduleExpiry(reservationId, expiryMs);
     // Deferred so the ReserveNow.conf is always sent before the StatusNotification it triggers.
     setImmediate(() => session.setConnectorStatus(targetConnectorId, "Reserved"));
     return { status: "Accepted" };
   }
 
-  function handleCancelReservation(payload: Record<string, unknown>): { status: OcppCancelReservationStatus } {
+  async function handleCancelReservation(
+    payload: Record<string, unknown>,
+  ): Promise<{ status: OcppCancelReservationStatus }> {
     const { reservationId } = payload;
     if (typeof reservationId !== "number") {
       throw new OcppCallError("PropertyConstraintViolation", "reservationId is required");
     }
-    const reservation = removeReservation(reservationId);
+    const reservation = await removeReservation(reservationId);
     if (!reservation) return { status: "Rejected" };
     // Deferred so the CancelReservation.conf is always sent before the StatusNotification it triggers.
     setImmediate(() => releaseConnectorIfReserved(reservation.connectorId));
     return { status: "Accepted" };
   }
 
-  function consumeReservation(connectorId: number, idTag: string): boolean {
-    const reservation = Array.from(reservations.values()).find((r) => r.connectorId === connectorId);
+  async function consumeReservation(connectorId: number, idTag: string): Promise<boolean> {
+    const all = await store.list();
+    const reservation = all.find((r) => r.connectorId === connectorId);
     if (!reservation) return false;
     if (reservation.idTag !== idTag && reservation.parentIdTag !== idTag) return false;
-    removeReservation(reservation.reservationId);
+    await removeReservation(reservation.reservationId);
     return true;
   }
 
@@ -151,10 +176,10 @@ export function createReservationHandlers(session: OcppChargePointSession): Rese
     handleReserveNow,
     handleCancelReservation,
     consumeReservation,
-    listReservations: () => Array.from(reservations.values()).map(toPublic),
+    listReservations: () => store.list(),
     dispose: () => {
-      for (const reservation of reservations.values()) clearTimeout(reservation.timer);
-      reservations.clear();
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     },
   };
 }

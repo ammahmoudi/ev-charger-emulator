@@ -628,7 +628,7 @@ describe("registerRemoteCommandHandlers", () => {
     it("accepts a reservation on an Available connector and marks it Reserved", async () => {
       await reserve(2, "TAG1", 1, "res-1");
       expect(session.getConnectorStatus(2)).toMatchObject({ status: "Reserved" });
-      expect(controller.listReservations()).toEqual([
+      expect(await controller.listReservations()).toEqual([
         expect.objectContaining({ reservationId: 1, connectorId: 2, idTag: "TAG1" }),
       ]);
     });
@@ -704,7 +704,7 @@ describe("registerRemoteCommandHandlers", () => {
       sendCall("SetChargingProfile", { connectorId: 1, csChargingProfiles: VALID_PROFILE }, "prof-1");
       const [, , result] = await queue.next();
       expect(result).toEqual({ status: "Accepted" });
-      expect(controller.listChargingProfiles(1)).toEqual([{ connectorId: 1, profile: VALID_PROFILE }]);
+      expect(await controller.listChargingProfiles(1)).toEqual([{ connectorId: 1, profile: VALID_PROFILE }]);
     });
 
     it("rejects with a CALLERROR for a malformed profile", async () => {
@@ -731,7 +731,7 @@ describe("registerRemoteCommandHandlers", () => {
       sendCall("ClearChargingProfile", { id: 1 }, "clear-1");
       const [, , result] = await queue.next();
       expect(result).toEqual({ status: "Accepted" });
-      expect(controller.listChargingProfiles()).toEqual([]);
+      expect(await controller.listChargingProfiles()).toEqual([]);
 
       sendCall("ClearChargingProfile", { id: 1 }, "clear-2");
       const [, , result2] = await queue.next();
@@ -741,7 +741,7 @@ describe("registerRemoteCommandHandlers", () => {
     it("captures RemoteStartTransaction's optional inline chargingProfile", async () => {
       sendCall("RemoteStartTransaction", { connectorId: 1, idTag: "TAG1", chargingProfile: VALID_PROFILE }, "prof-rst-1");
       await collectFrames(3);
-      expect(controller.listChargingProfiles(1)).toEqual([{ connectorId: 1, profile: VALID_PROFILE }]);
+      expect(await controller.listChargingProfiles(1)).toEqual([{ connectorId: 1, profile: VALID_PROFILE }]);
     });
   });
 
@@ -783,7 +783,7 @@ describe("registerRemoteCommandHandlers", () => {
       sendCall("GetLocalListVersion", {}, "llv-2");
       const [, , versionResult] = await queue.next();
       expect(versionResult).toEqual({ listVersion: 1 });
-      expect(controller.listLocalAuthListEntries()).toEqual([
+      expect(await controller.listLocalAuthListEntries()).toEqual([
         { idTag: "TAG1", idTagInfo: { status: "Accepted" } },
       ]);
     });
@@ -838,7 +838,7 @@ describe("registerRemoteCommandHandlers", () => {
       );
       const [, , result] = await queue.next();
       expect(result).toEqual({ status: "Accepted" });
-      expect(controller.listLocalAuthListEntries()).toEqual([]);
+      expect(await controller.listLocalAuthListEntries()).toEqual([]);
     });
   });
 
