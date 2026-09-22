@@ -96,16 +96,125 @@ Per the brief's completeness checklist, these CSMS→ChargePoint messages had no
   only (reset on restart) — this module has no persistence layer, and per `BRIEF.md` persistence
   (`DeviceInstanceConnectorState`, offline transaction queue, etc.) is `device-instances`'
   scope, not `ocpp/`'s. `remote-commands.ts`'s own `activeTransactions` map was already
-  in-memory-only before this change; the new state follows the same existing pattern.
-- CSMS-initiated `RemoteStartTransaction`/`RemoteStopTransaction` still track connector state only
-  in this module's in-memory maps, not in `device-instances`' Prisma-backed
-  `DeviceInstanceConnectorState` (used by the Home screen). That integration gap predates this
-  change and is cross-cutting (needs a `device-instances`-side change); flagging it here since it
-  limits how visible a CSMS-initiated remote start is in the UI, but a fix is outside owned files.
-- `SetChargingProfile`/`ClearChargingProfile` validate and store profiles but don't yet feed back
-  into the simulated charge rate (i.e., a `TxProfile` limiting to 10A doesn't actually throttle
-  the simulated `Power.Active.Import`). Full smart-charging enforcement would need the meter
-  simulation to consult the active profile's `chargingSchedule`; left as a follow-up given the
-  brief's emphasis on completeness (a slot for every message) over full enforcement semantics.
+  in-memory-only before this change; the new state follows the same existing pattern. **Update
+  (round 2):** the reservation/charging-profile/local-auth-list state is now behind an injectable
+  store interface (see the addendum below) so a caller *can* back it with Prisma — but no
+  Prisma-backed implementation exists yet, so the default (in-memory) behavior is unchanged.
+- ~~CSMS-initiated `RemoteStartTransaction`/`RemoteStopTransaction` still track connector state
+  only in this module's in-memory maps, not in `device-instances`' Prisma-backed
+  `DeviceInstanceConnectorState`~~ — **resolved by `agent/integration`'s merge**: see
+  `AUDIT-integration.md`'s `onRemoteTransactionStarted`/`onRemoteTransactionStopped` hooks (now
+  merged into `remote-command-types.ts`/`remote-commands.ts`), which `device-instances/runtime.ts`
+  wires to `connector-sessions.ts`'s `adoptRemoteSession`/`stopChargingSession`.
+- ~~`SetChargingProfile`/`ClearChargingProfile` validate and store profiles but don't yet feed back
+  into the simulated charge rate~~ — **resolved (round 2, see addendum below)**: a `TxProfile`'s
+  currently-active schedule period now clamps the simulated charge rate.
 - No support for the OCPP 1.6 Security Whitepaper's `SignedUpdateFirmware` /
   `SignedFirmwareStatusNotification` variant (out of Core/1.6J base scope).
+
+## Addendum — round 2 (post-`agent/integration` merge)
+
+Merged `agent/integration` (fast-forward, no conflicts) first, which brought in the
+`onRemoteTransactionStarted`/`onRemoteTransactionStopped` hooks referenced above. Then:
+
+### 1. `SetChargingProfile` now throttles the simulated charge rate
+
+`remote-commands.ts` gained `getActiveTxProfileSchedule`/`limitToKw`/`activePeriodLimitKw`/
+`effectiveChargeRateKwAt`: they look up the highest-`stackLevel` profile stored for the connector
+with `chargingProfilePurpose: "TxProfile"` (via `charging-profile.ts`'s `listChargingProfiles`),
+find its currently-active `chargingSchedulePeriod` (by elapsed transaction seconds), and clamp
+the device's rated power to that period's limit — converting `'A'` to kW via the module's
+existing `NOMINAL_VOLTAGE_V` constant, or reading `'W'` directly. `Power.Offered` in `MeterValues`
+now reports this throttled ceiling (previously always the rated power), and energy
+(`meterStart`/`meterStop`/the register) is integrated **piecewise** across the schedule's periods
+— a naive "current rate × total elapsed time" would make a mid-session throttle change appear to
+have applied retroactively to energy already accumulated before the profile was even set.
+
+Scoped narrowly, matching the round-2 brief: only `TxProfile` throttles (not
+`TxDefaultProfile`/`ChargePointMaxProfile` stacking/composition), and a profile's schedule is
+treated as relative to the transaction's own start regardless of `chargingProfileKind`
+(`Absolute`/`Recurring` anchoring isn't implemented — `TxProfile` is overwhelmingly used as
+`Relative` in practice). Both are documented as follow-ups, not silently assumed.
+
+### 2. `finishingHoldMs` closes the Finishing/Available timing mismatch
+
+Per `AUDIT-integration.md`'s "Timing mismatch during the stop sequence": added
+`RemoteCommandHandlersDeps.finishingHoldMs` (ms, default `0` = today's instant flip). When set,
+`stopTransaction` still sends `StopTransaction` to the CSMS and fires
+`onRemoteTransactionStarted`/`onRemoteTransactionStopped` immediately, but delays only the local
+`session.setConnectorStatus(connectorId, "Available")` call by that many ms after `Finishing`.
+`device-instances/runtime.ts` can now pass the same duration `connector-sessions.ts` uses for its
+own persisted `Finishing` hold, so the in-memory session (dashboard chip) and the Prisma-persisted
+state (Home/Cost screens) agree for the duration of the hold instead of briefly disagreeing.
+Pending hold timers are tracked in a `Set` and cancelled in `dispose()`.
+
+### 3. Injectable persistence stores for reservations / charging profiles / the local auth list
+
+Three new interfaces in `remote-command-types.ts`, each optional on `RemoteCommandHandlersDeps`
+and defaulting to an in-memory implementation (unexported factory functions inside the
+corresponding module) when omitted — same DI pattern as the existing `OcppConfigurationStore`
+(which `device-instances/prisma-configuration-store.ts` already backs with Prisma). **Exact
+shapes, for whoever implements the Prisma-backed side in round 2:**
+
+```ts
+// Backs ReserveNow/CancelReservation. Default: in-memory Map, in reservation.ts.
+// Note: the expiry *timer* stays in reservation.ts regardless of store — it's
+// runtime-only. A Prisma-backed store means reservations survive a restart as
+// *data*, but a caller wanting them to actually re-expire correctly across a
+// restart would need to re-arm timers for any still-valid rows at startup.
+interface OcppReservationStore {
+  list(): Promise<OcppReservation[]>;
+  get(reservationId: number): Promise<OcppReservation | undefined>;
+  set(reservation: OcppReservation): Promise<void>;
+  delete(reservationId: number): Promise<void>;
+}
+// OcppReservation: { reservationId: number; connectorId: number; idTag: string;
+//                    parentIdTag?: string; expiryDate: string }
+
+// Backs SetChargingProfile/ClearChargingProfile, keyed by chargingProfileId.
+// Default: in-memory Map, in charging-profile.ts. Deliberately minimal — no
+// query params; ClearChargingProfile's id/connectorId/chargingProfilePurpose/
+// stackLevel filtering happens in charging-profile.ts itself, over store.list().
+interface OcppChargingProfileStore {
+  list(): Promise<OcppChargingProfileEntry[]>;
+  set(chargingProfileId: number, entry: OcppChargingProfileEntry): Promise<void>;
+  delete(chargingProfileId: number): Promise<void>;
+}
+// OcppChargingProfileEntry: { connectorId: number; profile: Record<string, unknown> }
+// (profile is the raw csChargingProfiles object; chargingProfileId lives at profile.chargingProfileId)
+
+// Backs SendLocalList/GetLocalListVersion: a version counter + idTag->idTagInfo
+// map. Default: in-memory, in local-list.ts. Full/Differential update semantics
+// (replace-all vs. upsert-or-remove-per-entry) stay in local-list.ts; the store
+// is just get/set/delete primitives.
+interface OcppLocalAuthListStore {
+  getVersion(): Promise<number>;
+  setVersion(version: number): Promise<void>;
+  listEntries(): Promise<OcppLocalListEntry[]>;
+  setEntry(idTag: string, idTagInfo: OcppIdTagInfo): Promise<void>;
+  deleteEntry(idTag: string): Promise<void>;
+  clearEntries(): Promise<void>;
+}
+// OcppLocalListEntry: { idTag: string; idTagInfo: OcppIdTagInfo }
+// OcppIdTagInfo: { status: 'Accepted'|'Blocked'|'Expired'|'Invalid'|'ConcurrentTx';
+//                  expiryDate?: string; parentIdTag?: string }
+```
+
+Wire a Prisma-backed implementation in via `RemoteCommandHandlersDeps.reservationStore` /
+`.chargingProfileStore` / `.localAuthListStore` (same place `configStore` is already wired in
+`device-instances/runtime.ts`'s `createEntry`) — no changes needed inside `src/lib/ocpp` itself.
+
+Because a real store is necessarily async, the handler functions that read this state
+(`RemoteCommandHandlers.listReservations`/`listChargingProfiles`/`getLocalAuthListVersion`/
+`listLocalAuthListEntries`) are now `async` too (previously synchronous) — a breaking change to
+that introspection surface, applied here since there were no other consumers yet besides this
+module's own tests (updated accordingly).
+
+### Testing
+
+`npx vitest run` (79/79 in `src/lib/ocpp`, up from 72 after the merge), `npx tsc --noEmit` (clean
+except the pre-existing `layout.tsx` error), `npx eslint .` (clean) — all re-verified after each
+of the three commits this round. New coverage: 5 tests for TxProfile throttling (W/A unit
+conversion, no-op when the limit exceeds rated power, piecewise multi-period integration, and
+`TxDefaultProfile` not throttling), 2 for `finishingHoldMs` (holds then flips, and the
+`onRemoteTransactionStopped` hook still fires immediately regardless of the hold).
