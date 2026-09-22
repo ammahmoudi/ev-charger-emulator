@@ -127,3 +127,37 @@ Live-connect a running instance to a real CSMS (this pass deliberately never did
 worktree's `BRIEF.md`) and drive a `RemoteStartTransaction`/`RemoteStopTransaction` from it, then
 confirm the Home screen shows the session and the Cost screen shows a matching entry with the
 same energy the CSMS's own `MeterValues`/`StopTransaction` recorded.
+
+## Round 2
+
+Merged `agent/ocpp`, `agent/state`, `agent/ui`'s round-2 work (see each `AUDIT-*.md`'s round-2
+addendum) — all three merges were clean (`agent/ui`'s merge auto-resolved one non-conflicting
+overlap in `diagnostics.test.ts`, where both `agent/state` and `agent/ui` had touched different
+describe blocks in the same file). `agent/state`'s round-2 item #5 (Prisma-backed stores for
+`agent/ocpp`'s new `OcppReservationStore`/`OcppChargingProfileStore`/`OcppLocalAuthListStore`
+interfaces) completed successfully — `agent/state` waited for and merged `agent/ocpp`'s round-2
+commits before implementing its side, confirmed by reading `runtime.ts`: all three stores are
+wired into `registerRemoteCommandHandlers`.
+
+One issue surfaced by the merge, fixed here: round 2's diagnostics/hardware-test toggle-state
+persistence made previously-DB-free unit tests in `diagnostics.test.ts` and
+`hardware-test-state.test.ts` start requiring `DATABASE_URL` without being gated for it (14 new
+failures in this sandbox, which still can't reach the mapped Postgres port — see round 1's
+Testing section). For `diagnostics.ts` (no existing DI seam), gated the three affected
+`describe` blocks with the same `describe.skipIf(!process.env.DATABASE_URL)` pattern already
+used elsewhere in that file. For `hardware-test-state.ts` — which already has a
+dependency-injection pattern (`HardwareTestStateDeps`) specifically so its own tests don't need a
+real DB — did the more consistent fix instead: added
+`loadPersistedInstanceSettings`/`savePersistedInstanceSettings`/`loadPersistedPlugToggles`/
+`savePersistedPlugToggles` to that interface (defaulting to the existing Prisma-backed
+implementations) and threaded them through, restoring all 14 of that file's behavior tests to
+running DB-free rather than losing that coverage to a blanket skip.
+
+Round 2 final state (this sandbox, still without Postgres reachability): `npx vitest run` — 136
+passing, 80 skipped (DB-gated, correctly absent `DATABASE_URL`), 0 failures. `npx tsc --noEmit`
+clean (pre-existing `layout.tsx` error only). `npx eslint .` clean.
+
+Real-DB verification of this exact merged/fixed state, the live-CSMS connectivity test, and
+pushing/opening a PR were delegated to a herdr agent with genuine Docker/network access (this
+sandbox has none — confirmed: DNS resolution itself fails). See that agent's own report for
+results.
