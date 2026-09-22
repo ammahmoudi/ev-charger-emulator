@@ -52,3 +52,13 @@ export interface ConnectorView {
 export function connectorDisplayLabel(connector: ConnectorView): string {
   return connector.label ?? `Plug ${connector.evseIndex}`;
 }
+
+/**
+ * Sorts connectors into the same (evseIndex, connectorIndex) order `orderModelConnectors` uses
+ * to assign numeric OCPP `connectorId`s — used to zip a diagnostics `ConnectorView` list (keyed
+ * by DB id) against a `ConnectorRuntimeView` list (keyed by numeric connectorId) for the same
+ * device model, since neither list carries the other's id.
+ */
+export function orderConnectorsByEvse<T extends { evseIndex: number; connectorIndex: number }>(connectors: T[]): T[] {
+  return [...connectors].sort((a, b) => a.evseIndex - b.evseIndex || a.connectorIndex - b.connectorIndex);
+}
