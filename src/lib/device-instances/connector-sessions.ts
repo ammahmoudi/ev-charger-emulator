@@ -1,6 +1,8 @@
+import type { OcppChargePointStatus } from "@/lib/ocpp";
 import { orderModelConnectors } from "@/lib/device-instances/connectors";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
-import { callOcpp } from "@/lib/device-instances/runtime";
+import { queueOutboxMessage } from "@/lib/device-instances/outbox";
+import { callOcpp, getOrCreateChargePointSession } from "@/lib/device-instances/runtime";
 import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
@@ -15,6 +17,32 @@ const MS_PER_HOUR = 3_600_000;
  * without making the user wait long in the emulator.
  */
 const PREPARING_DURATION_MS = 8_000;
+
+/**
+ * How long a stopped connector stays in `Finishing` before settling on its final status. Real
+ * `PEVC3107E` `StatusNotification` traffic (CitrineOS DB, station 89) shows `Charging` ->
+ * `Finishing` -> `Available` with `Finishing` lasting anywhere from ~5s to ~2min; 5s keeps it
+ * visible across a couple of poll cycles without making the post-charge popup feel stuck.
+ */
+const FINISHING_DURATION_MS = 5_000;
+
+/**
+ * Best-effort mirror of a local status transition onto the instance's real
+ * `OcppChargePointSession` (see `runtime.ts::getOrCreateChargePointSession`), so the
+ * dashboard's live connector chips (`serialize.ts::buildConnectorSummaries`, which reads the
+ * session's tracked status rather than `DeviceInstanceConnectorState`) agree with the Home/Lock/
+ * Cost screens, and — once the instance is actually connected — so the CSMS receives a real
+ * `StatusNotification` for locally-simulated sessions too, not just CSMS-initiated ones. Never
+ * throws: a session lookup failure must not fail the local state transition it's mirroring.
+ */
+async function notifySessionStatus(deviceInstanceId: string, connectorId: number, status: OcppChargePointStatus): Promise<void> {
+  try {
+    const session = await getOrCreateChargePointSession(deviceInstanceId);
+    session.setConnectorStatus(connectorId, status);
+  } catch (err) {
+    console.error(`Failed to mirror connector ${connectorId} status "${status}" onto the OCPP session for ${deviceInstanceId}:`, err);
+  }
+}
 
 /** Rounds to 2 decimal places. */
 function round2(value: number): number {
@@ -83,12 +111,14 @@ async function resolvePreparingPromotion(
   if (state.status !== "Preparing" || !state.activeStartedAt) return null;
   if (now.getTime() - state.activeStartedAt.getTime() < PREPARING_DURATION_MS) return null;
 
-  const label = (await getConnectorLabel(deviceInstanceId, state.connectorId)) ?? `Connector ${state.connectorId}`;
   const transactionId = state.transactionCounter + 1;
   const chargingStartedAt = new Date(state.activeStartedAt.getTime() + PREPARING_DURATION_MS);
 
-  const updated = await prisma.deviceInstanceConnectorState.update({
-    where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId: state.connectorId } },
+  // Guard against two concurrent pollers both promoting the same connector (see AUDIT-state.md):
+  // only the caller whose conditional update actually matches a still-`Preparing` row logs events
+  // and notifies the OCPP session; a loser just returns the winner's already-updated row.
+  const { count } = await prisma.deviceInstanceConnectorState.updateMany({
+    where: { deviceInstanceId, connectorId: state.connectorId, status: "Preparing" },
     data: {
       status: "Charging",
       activeTransactionId: transactionId,
@@ -97,6 +127,12 @@ async function resolvePreparingPromotion(
     },
   });
 
+  const updated = await prisma.deviceInstanceConnectorState.findUniqueOrThrow({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId: state.connectorId } },
+  });
+  if (count === 0) return updated;
+
+  const label = (await getConnectorLabel(deviceInstanceId, state.connectorId)) ?? `Connector ${state.connectorId}`;
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Charging`, chargingStartedAt);
   await logDeviceInstanceEvent(
     deviceInstanceId,
@@ -104,8 +140,48 @@ async function resolvePreparingPromotion(
     `${label}: transaction #${transactionId} started (card ${state.activeIdTag})`,
     chargingStartedAt,
   );
+  await notifySessionStatus(deviceInstanceId, state.connectorId, "Charging");
 
   return updated;
+}
+
+/**
+ * If `state` has been sitting in `Finishing` for at least `FINISHING_DURATION_MS`, promotes it
+ * to its final status (`finishingNextStatus`, typically `Available`). Mirrors
+ * `resolvePreparingPromotion`'s conditional-update race guard.
+ */
+async function resolveFinishingPromotion(
+  deviceInstanceId: string,
+  state: ConnectorState,
+  now: Date,
+): Promise<ConnectorState | null> {
+  if (state.status !== "Finishing" || !state.finishingSince) return null;
+  if (now.getTime() - state.finishingSince.getTime() < FINISHING_DURATION_MS) return null;
+
+  const finalStatus = state.finishingNextStatus ?? "Available";
+
+  const { count } = await prisma.deviceInstanceConnectorState.updateMany({
+    where: { deviceInstanceId, connectorId: state.connectorId, status: "Finishing" },
+    data: { status: finalStatus, locked: false, finishingSince: null, finishingNextStatus: null },
+  });
+
+  const updated = await prisma.deviceInstanceConnectorState.findUniqueOrThrow({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId: state.connectorId } },
+  });
+  if (count === 0) return updated;
+
+  const label = (await getConnectorLabel(deviceInstanceId, state.connectorId)) ?? `Connector ${state.connectorId}`;
+  await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to ${finalStatus}`, now);
+  await notifySessionStatus(deviceInstanceId, state.connectorId, finalStatus as OcppChargePointStatus);
+
+  return updated;
+}
+
+/** Resolves either pending promotion (`Preparing`->`Charging` or `Finishing`->final status) due for `state`. */
+async function resolvePendingPromotion(deviceInstanceId: string, state: ConnectorState, now: Date): Promise<ConnectorState | null> {
+  return (
+    (await resolvePreparingPromotion(deviceInstanceId, state, now)) ?? (await resolveFinishingPromotion(deviceInstanceId, state, now))
+  );
 }
 
 /**
@@ -113,9 +189,10 @@ async function resolvePreparingPromotion(
  * instance's model, using the same (evseIndex, connectorIndex)-ordered `connectorId`
  * numbering as `runtime.ts`'s real `OcppChargePointSession` wiring and `serialize.ts`'s
  * connector summaries — so "connector 1" here is the same physical connector everywhere
- * else in the app. Also lazily promotes any connector that's been `Preparing` long enough to
- * `Charging` (see `resolvePreparingPromotion`) — there's no background job, so this read path
- * (polled by the Home screen every couple seconds) is what actually advances the state machine.
+ * else in the app. Also lazily promotes any connector that's been `Preparing` or `Finishing`
+ * long enough to move on (see `resolvePendingPromotion`) — there's no background job, so this
+ * read path (polled by the Home screen every couple seconds) is what actually advances the
+ * state machine.
  */
 export async function listConnectorStates(deviceInstanceId: string): Promise<ConnectorRuntimeView[]> {
   const instance = await prisma.deviceInstance.findUniqueOrThrow({
@@ -126,7 +203,7 @@ export async function listConnectorStates(deviceInstanceId: string): Promise<Con
   const states = await prisma.deviceInstanceConnectorState.findMany({ where: { deviceInstanceId } });
   const now = new Date();
   const resolvedStates = await Promise.all(
-    states.map(async (state) => (await resolvePreparingPromotion(deviceInstanceId, state, now)) ?? state),
+    states.map(async (state) => (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state),
   );
   const stateByConnectorId = new Map(resolvedStates.map((s) => [s.connectorId, s]));
 
@@ -208,6 +285,7 @@ export async function clearConnectorFault(deviceInstanceId: string, connectorId:
   });
   const label = (await getConnectorLabel(deviceInstanceId, connectorId)) ?? `Connector ${connectorId}`;
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Available (Event Clear)`);
+  await notifySessionStatus(deviceInstanceId, connectorId, "Available");
 
   const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
   return view;
@@ -233,7 +311,7 @@ export async function startChargingSession(
 
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
-  state = (await resolvePreparingPromotion(deviceInstanceId, state, now)) ?? state;
+  state = (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state;
 
   if (state.activeStartedAt) {
     throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);
@@ -258,6 +336,7 @@ export async function startChargingSession(
   });
 
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Preparing`, startedAt);
+  await notifySessionStatus(deviceInstanceId, connectorId, "Preparing");
 
   const [view] = (await listConnectorStates(deviceInstanceId)).filter((c) => c.connectorId === connectorId);
   return view;
@@ -347,7 +426,7 @@ export async function stopChargingSession(
 ): Promise<StopSessionResult> {
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
-  state = (await resolvePreparingPromotion(deviceInstanceId, state, now)) ?? state;
+  state = (await resolvePendingPromotion(deviceInstanceId, state, now)) ?? state;
 
   if (!state.activeStartedAt || !state.activeIdTag || !state.activeChargeRateKw) {
     throw new ConnectorSessionError(`Connector ${connectorId} has no session in progress`);
@@ -360,15 +439,20 @@ export async function stopChargingSession(
   const { pricePerKwh, currency, serviceFeePerSession } = await getFeeRateParams(deviceInstanceId);
   const cost = energyWh > 0 ? round2((energyWh / WH_PER_KWH) * pricePerKwh + serviceFeePerSession) : 0;
   const isFault = isFaultStopCause(options.stopCause);
+  // A cancelled-before-start `Preparing` stop (no transaction id was ever minted) and a fault
+  // stop both skip the `Finishing` hold — one because there's nothing to "finish", the other
+  // because a fault is an abrupt stop, not a graceful wind-down.
+  const goesThroughFinishing = state.activeTransactionId != null && !isFault;
 
   if (state.activeIsRemote && state.activeTransactionId != null) {
+    const stopTransactionPayload = {
+      transactionId: state.activeTransactionId,
+      meterStop: Math.round(energyWh),
+      timestamp: stoppedAt.toISOString(),
+      reason: options.stopCause,
+    };
     try {
-      await callOcpp(deviceInstanceId, "StopTransaction", {
-        transactionId: state.activeTransactionId,
-        meterStop: Math.round(energyWh),
-        timestamp: stoppedAt.toISOString(),
-        reason: options.stopCause,
-      });
+      await callOcpp(deviceInstanceId, "StopTransaction", stopTransactionPayload);
     } catch (err) {
       await logDeviceInstanceEvent(
         deviceInstanceId,
@@ -376,6 +460,9 @@ export async function stopChargingSession(
         `${label}: failed to notify CSMS of StopTransaction #${state.activeTransactionId} (${err instanceof Error ? err.message : String(err)})`,
         stoppedAt,
       );
+      // "Local storage": queue it so a reconnect replays the StopTransaction instead of the
+      // CSMS's transaction record dangling open forever (see AUDIT-state.md's offline-outbox finding).
+      await queueOutboxMessage(deviceInstanceId, "StopTransaction", stopTransactionPayload);
     }
   }
 
@@ -397,15 +484,27 @@ export async function stopChargingSession(
 
   await prisma.deviceInstanceConnectorState.update({
     where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
-    data: {
-      status: isFault ? "Faulted" : "Available",
-      locked: false,
-      activeIdTag: null,
-      activeTransactionId: null,
-      activeStartedAt: null,
-      activeChargeRateKw: null,
-      activeIsRemote: false,
-    },
+    data: goesThroughFinishing
+      ? {
+          status: "Finishing",
+          locked: true,
+          activeIdTag: null,
+          activeTransactionId: null,
+          activeStartedAt: null,
+          activeChargeRateKw: null,
+          activeIsRemote: false,
+          finishingSince: stoppedAt,
+          finishingNextStatus: "Available",
+        }
+      : {
+          status: isFault ? "Faulted" : "Available",
+          locked: false,
+          activeIdTag: null,
+          activeTransactionId: null,
+          activeStartedAt: null,
+          activeChargeRateKw: null,
+          activeIsRemote: false,
+        },
   });
 
   if (state.activeTransactionId != null) {
@@ -425,8 +524,13 @@ export async function stopChargingSession(
   }
   if (isFault) {
     await logDeviceInstanceEvent(deviceInstanceId, "FAULT", `${label} fault: ${options.stopCause}`, stoppedAt);
+    await notifySessionStatus(deviceInstanceId, connectorId, "Faulted");
+  } else if (goesThroughFinishing) {
+    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Finishing`, stoppedAt);
+    await notifySessionStatus(deviceInstanceId, connectorId, "Finishing");
   } else {
     await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Available`, stoppedAt);
+    await notifySessionStatus(deviceInstanceId, connectorId, "Available");
   }
 
   return {
