@@ -10,7 +10,19 @@ const DEFAULT_CONFIGURATION_ENTRIES: OcppConfigurationEntry[] = [
   { key: "ConnectionTimeOut", readonly: false, value: "60" },
   { key: "NumberOfConnectors", readonly: true, value: "2" },
   { key: "MeterValueSampleInterval", readonly: false, value: "60" },
-  { key: "SupportedFeatureProfiles", readonly: true, value: "Core" },
+  {
+    key: "MeterValuesSampledData",
+    readonly: false,
+    value: "Energy.Active.Import.Register,Power.Active.Import,Power.Offered,Voltage,Current.Import,SoC",
+  },
+  {
+    key: "SupportedFeatureProfiles",
+    readonly: true,
+    value: "Core,FirmwareManagement,LocalAuthListManagement,Reservation,SmartCharging,RemoteTrigger",
+  },
+  { key: "ReserveConnectorZeroSupported", readonly: true, value: "true" },
+  // Matches MAX_LOCAL_LIST_ENTRIES in ./local-list.ts.
+  { key: "SendLocalListMaxLength", readonly: true, value: "500" },
 ];
 
 /**
