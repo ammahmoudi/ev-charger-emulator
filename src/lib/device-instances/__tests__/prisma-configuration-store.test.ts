@@ -54,4 +54,17 @@ describe.skipIf(!process.env.DATABASE_URL)("PrismaConfigurationStore (integratio
     const status = await store.set("notARealKey", "anything");
     expect(status).toBe("NotSupported");
   });
+
+  // A CSMS-initiated ChangeConfiguration shouldn't be able to push a value the Settings-UI edit
+  // path (validateParameterValue, via PATCH /api/device-instances/[id]) would itself reject.
+  it("set() returns Rejected (not Accepted) for a value that fails the parameter's own valueType validation, and leaves the stored value unchanged", async () => {
+    const store = await setup();
+    const status = await store.set("pricePerKwh", "not-a-number");
+    expect(status).toBe("Rejected");
+
+    const row = await prisma.deviceInstanceParameter.findFirst({
+      where: { deviceInstanceId: instanceId, deviceModelParameter: { key: "pricePerKwh" } },
+    });
+    expect(row?.value).toBe("0.35");
+  });
 });
