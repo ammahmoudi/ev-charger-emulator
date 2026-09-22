@@ -1,18 +1,22 @@
+import type { Prisma } from "@prisma/client";
+
 import { orderModelConnectors } from "@/lib/device-instances/connectors";
 import { prisma } from "@/lib/prisma";
 
 /**
- * Simulated per-instance status/diagnostics state (issue #4), kept in-memory alongside the
- * persisted DeviceInstance — not Prisma-backed, per the issue's acceptance criteria. Every
- * instance starts "normally healthy"; individual fields can be flipped to "abnormal" for
- * testing, matching real captures where e.g. Circuit breaker Status, Emergency, and Cabinet
- * Door each went abnormal independently while the rest of the grid stayed normal.
+ * Simulated per-instance status/diagnostics state (issue #4). The *toggled* fields (the health/
+ * comm flags below, `OVERALL_HEALTH_FIELDS`/`INTERFACE_BOARD_TOGGLE_FIELDS`/`CONTACTOR_FIELDS`/
+ * per-module comm flags) are persisted (`DeviceInstance.diagnosticsInstanceState` for the
+ * instance-level grid + modules, `DeviceInstanceConnectorDiagnosticState.diagnosticsToggles` per
+ * plug) so a fault injected for testing survives a restart, matching a real device's fault flags.
+ * An in-memory `Map` (`registry` below) still caches state per instance within a single process
+ * (avoiding a DB round-trip on every poll), populated from Postgres on first access.
  *
- * Numeric readouts (temperatures, voltages, currents, error codes) are not persisted values —
- * they're recomputed with small jitter around a baseline on every read, so the screens show
- * "live" telemetry instead of frozen constants, without needing a polling/tick loop. Two
- * exceptions derive from real persisted data instead of a fixed/random baseline: a plug's output
- * current comes from its connector's actual active charging session
+ * Numeric readouts (temperatures, voltages, currents, error codes) are NOT persisted — they're
+ * recomputed with small jitter around a baseline on every read, so the screens show "live"
+ * telemetry instead of frozen constants, without needing a polling/tick loop. Two exceptions
+ * derive from real persisted data instead of a fixed/random baseline: a plug's output current
+ * comes from its connector's actual active charging session
  * (`connector-sessions.ts`/`DeviceInstanceConnectorState`), and its lifetime `energyTotal` comes
  * from summing its completed `DeviceInstanceSession` rows — see `getPlugOutputCurrent` and
  * `getInterfaceBoardReading`.
@@ -150,23 +154,91 @@ if (process.env.NODE_ENV !== "production") {
   globalForDiagnostics.deviceDiagnosticsRegistry = registry;
 }
 
-function getOrCreateState(instanceId: string): DeviceDiagnosticState {
+interface PersistedInstanceDiagnostics {
+  overall?: Partial<OverallHealth>;
+  modules?: HealthStatus[];
+}
+
+async function loadPersistedInstanceState(instanceId: string): Promise<PersistedInstanceDiagnostics | null> {
+  const row = await prisma.deviceInstance.findUnique({
+    where: { id: instanceId },
+    select: { diagnosticsInstanceState: true },
+  });
+  return (row?.diagnosticsInstanceState as PersistedInstanceDiagnostics | null) ?? null;
+}
+
+async function persistInstanceState(instanceId: string, state: DeviceDiagnosticState): Promise<void> {
+  const data: PersistedInstanceDiagnostics = { overall: state.overall, modules: state.modules };
+  try {
+    await prisma.deviceInstance.update({
+      where: { id: instanceId },
+      data: { diagnosticsInstanceState: data as Prisma.InputJsonValue },
+    });
+  } catch (err) {
+    console.error(`Failed to persist diagnostics instance state for ${instanceId}:`, err);
+  }
+}
+
+async function getOrCreateState(instanceId: string): Promise<DeviceDiagnosticState> {
   let state = registry.get(instanceId);
   if (!state) {
+    const persisted = await loadPersistedInstanceState(instanceId);
     state = {
-      overall: createDefaultOverallHealth(),
+      overall: { ...createDefaultOverallHealth(), ...persisted?.overall },
       plugs: new Map(),
-      modules: Array.from({ length: COMMUNICATION_MODULE_COUNT }, () => "normal"),
+      modules: persisted?.modules ?? Array.from({ length: COMMUNICATION_MODULE_COUNT }, () => "normal"),
     };
     registry.set(instanceId, state);
   }
   return state;
 }
 
-function getOrCreatePlug(state: DeviceDiagnosticState, connectorId: string): InterfaceBoardReading {
+/** `InterfaceBoardReading`'s toggle-only fields — everything persisted for a plug (`renderInterfaceBoard` fills in jittered/derived fields on read). */
+type PersistedPlugDiagnostics = Pick<
+  InterfaceBoardReading,
+  "seccCommunication" | "meterCommunication" | "interfaceBoardCommunication" | "fuseStatus" | "km1Status" | "km2Status" | "plcErrorCode" | "evErrorCode"
+>;
+
+function extractPersistedPlugFields(plug: InterfaceBoardReading): PersistedPlugDiagnostics {
+  return {
+    seccCommunication: plug.seccCommunication,
+    meterCommunication: plug.meterCommunication,
+    interfaceBoardCommunication: plug.interfaceBoardCommunication,
+    fuseStatus: plug.fuseStatus,
+    km1Status: plug.km1Status,
+    km2Status: plug.km2Status,
+    plcErrorCode: plug.plcErrorCode,
+    evErrorCode: plug.evErrorCode,
+  };
+}
+
+async function persistPlugToggles(instanceId: string, connectorId: string, plug: InterfaceBoardReading): Promise<void> {
+  const numericConnectorId = await resolveNumericConnectorId(instanceId, connectorId);
+  if (numericConnectorId == null) return;
+  const toggles = extractPersistedPlugFields(plug);
+  try {
+    await prisma.deviceInstanceConnectorDiagnosticState.upsert({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: numericConnectorId } },
+      create: { deviceInstanceId: instanceId, connectorId: numericConnectorId, diagnosticsToggles: toggles as Prisma.InputJsonValue },
+      update: { diagnosticsToggles: toggles as Prisma.InputJsonValue },
+    });
+  } catch (err) {
+    console.error(`Failed to persist diagnostics toggles for ${instanceId} connector ${connectorId}:`, err);
+  }
+}
+
+async function getOrCreatePlug(instanceId: string, state: DeviceDiagnosticState, connectorId: string): Promise<InterfaceBoardReading> {
   let plug = state.plugs.get(connectorId);
   if (!plug) {
-    plug = createDefaultInterfaceBoard();
+    const numericConnectorId = await resolveNumericConnectorId(instanceId, connectorId);
+    let persisted: Partial<PersistedPlugDiagnostics> | null = null;
+    if (numericConnectorId != null) {
+      const row = await prisma.deviceInstanceConnectorDiagnosticState.findUnique({
+        where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: numericConnectorId } },
+      });
+      persisted = (row?.diagnosticsToggles as Partial<PersistedPlugDiagnostics> | null) ?? null;
+    }
+    plug = { ...createDefaultInterfaceBoard(), ...persisted };
     state.plugs.set(connectorId, plug);
   }
   return plug;
@@ -182,13 +254,15 @@ export function disposeDiagnosticState(instanceId: string): void {
   registry.delete(instanceId);
 }
 
-export function getOverallHealth(instanceId: string): OverallHealth {
-  return { ...getOrCreateState(instanceId).overall };
+export async function getOverallHealth(instanceId: string): Promise<OverallHealth> {
+  const state = await getOrCreateState(instanceId);
+  return { ...state.overall };
 }
 
-export function setOverallHealthField(instanceId: string, field: OverallHealthField, value: HealthStatus): OverallHealth {
-  const state = getOrCreateState(instanceId);
+export async function setOverallHealthField(instanceId: string, field: OverallHealthField, value: HealthStatus): Promise<OverallHealth> {
+  const state = await getOrCreateState(instanceId);
   state.overall[field] = value;
+  await persistInstanceState(instanceId, state);
   return { ...state.overall };
 }
 
@@ -240,7 +314,8 @@ async function renderInterfaceBoard(instanceId: string, connectorId: string, plu
 
 /** Returns a plug's interface-board reading with numeric fields jittered around baseline (comm/health fields are exactly as toggled). */
 export async function getInterfaceBoardReading(instanceId: string, connectorId: string): Promise<InterfaceBoardReading> {
-  const plug = getOrCreatePlug(getOrCreateState(instanceId), connectorId);
+  const state = await getOrCreateState(instanceId);
+  const plug = await getOrCreatePlug(instanceId, state, connectorId);
   return renderInterfaceBoard(instanceId, connectorId, plug);
 }
 
@@ -250,13 +325,14 @@ export async function setInterfaceBoardToggleField(
   field: InterfaceBoardToggleField,
   value: HealthStatus,
 ): Promise<InterfaceBoardReading> {
-  const state = getOrCreateState(instanceId);
-  const plug = getOrCreatePlug(state, connectorId);
+  const state = await getOrCreateState(instanceId);
+  const plug = await getOrCreatePlug(instanceId, state, connectorId);
   plug[field] = value;
   // Keep the PLC error code / EV error code consistent with the health flags that gate them,
   // mirroring the real device where a nonzero code accompanies the abnormal comm flag.
   if (field === "interfaceBoardCommunication") plug.plcErrorCode = value === "abnormal" ? "0x11" : "0x00";
   if (field === "seccCommunication") plug.evErrorCode = value === "abnormal" ? 1 : 0;
+  await persistPlugToggles(instanceId, connectorId, plug);
   return renderInterfaceBoard(instanceId, connectorId, plug);
 }
 
@@ -266,14 +342,15 @@ export async function setContactorField(
   field: ContactorField,
   value: ContactStatus,
 ): Promise<InterfaceBoardReading> {
-  const state = getOrCreateState(instanceId);
-  const plug = getOrCreatePlug(state, connectorId);
+  const state = await getOrCreateState(instanceId);
+  const plug = await getOrCreatePlug(instanceId, state, connectorId);
   plug[field] = value;
+  await persistPlugToggles(instanceId, connectorId, plug);
   return renderInterfaceBoard(instanceId, connectorId, plug);
 }
 
-export function getCommunicationModules(instanceId: string): CommunicationModule[] {
-  const state = getOrCreateState(instanceId);
+export async function getCommunicationModules(instanceId: string): Promise<CommunicationModule[]> {
+  const state = await getOrCreateState(instanceId);
   return state.modules.map((comm) => ({
     comm,
     voltage: comm === "normal" ? jitter(230, 2) : jitter(180, 15),
@@ -281,12 +358,13 @@ export function getCommunicationModules(instanceId: string): CommunicationModule
   }));
 }
 
-export function setCommunicationModuleField(instanceId: string, moduleIndex: number, value: HealthStatus): CommunicationModule[] {
-  const state = getOrCreateState(instanceId);
+export async function setCommunicationModuleField(instanceId: string, moduleIndex: number, value: HealthStatus): Promise<CommunicationModule[]> {
+  const state = await getOrCreateState(instanceId);
   if (moduleIndex < 0 || moduleIndex >= state.modules.length) {
     throw new RangeError(`moduleIndex must be between 0 and ${state.modules.length - 1}`);
   }
   state.modules[moduleIndex] = value;
+  await persistInstanceState(instanceId, state);
   return getCommunicationModules(instanceId);
 }
 

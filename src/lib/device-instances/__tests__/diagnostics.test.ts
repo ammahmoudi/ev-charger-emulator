@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  disposeDiagnosticState,
   getCommunicationModules,
   getInterfaceBoardReading,
   getOverallHealth,
@@ -14,8 +15,8 @@ import {
 import { prisma } from "@/lib/prisma";
 
 describe("getOverallHealth", () => {
-  it("defaults every health field to normal for a fresh instance", () => {
-    const overall = getOverallHealth(`instance-${Math.random()}`);
+  it("defaults every health field to normal for a fresh instance", async () => {
+    const overall = await getOverallHealth(`instance-${Math.random()}`);
     for (const field of OVERALL_HEALTH_FIELDS) {
       expect(overall[field]).toBe("normal");
     }
@@ -23,14 +24,14 @@ describe("getOverallHealth", () => {
 });
 
 describe("setOverallHealthField", () => {
-  it("flips one field to abnormal without affecting the others", () => {
+  it("flips one field to abnormal without affecting the others", async () => {
     const id = `instance-${Math.random()}`;
-    const updated = setOverallHealthField(id, "circuitBreakerStatus", "abnormal");
+    const updated = await setOverallHealthField(id, "circuitBreakerStatus", "abnormal");
     expect(updated.circuitBreakerStatus).toBe("abnormal");
     expect(updated.emergency).toBe("normal");
     expect(updated.cabinetDoor).toBe("normal");
 
-    expect(getOverallHealth(id).circuitBreakerStatus).toBe("abnormal");
+    expect((await getOverallHealth(id)).circuitBreakerStatus).toBe("abnormal");
   });
 });
 
@@ -73,23 +74,23 @@ describe("getPlugOutputCurrent", () => {
 });
 
 describe("communication modules", () => {
-  it("returns 14 modules, all normal by default", () => {
+  it("returns 14 modules, all normal by default", async () => {
     const id = `instance-${Math.random()}`;
-    const modules = getCommunicationModules(id);
+    const modules = await getCommunicationModules(id);
     expect(modules).toHaveLength(14);
     expect(modules.every((m) => m.comm === "normal")).toBe(true);
   });
 
-  it("flips a single module to abnormal by index", () => {
+  it("flips a single module to abnormal by index", async () => {
     const id = `instance-${Math.random()}`;
-    const modules = setCommunicationModuleField(id, 3, "abnormal");
+    const modules = await setCommunicationModuleField(id, 3, "abnormal");
     expect(modules[3].comm).toBe("abnormal");
     expect(modules[2].comm).toBe("normal");
   });
 
-  it("rejects an out-of-range module index", () => {
+  it("rejects an out-of-range module index", async () => {
     const id = `instance-${Math.random()}`;
-    expect(() => setCommunicationModuleField(id, 99, "abnormal")).toThrow(RangeError);
+    await expect(setCommunicationModuleField(id, 99, "abnormal")).rejects.toThrow(RangeError);
   });
 });
 
@@ -166,5 +167,36 @@ describe.skipIf(!process.env.DATABASE_URL)("diagnostics derived from real sessio
 
     const after = await getInterfaceBoardReading(instanceId, connectorRowId);
     expect(after.energyTotal).toBeCloseTo(before.energyTotal + 12, 3);
+  });
+
+  // `disposeDiagnosticState` clears this module's in-memory cache for an instance — calling it
+  // and then re-reading is exactly what happens on a real restart (a fresh process has no cache
+  // and must load from Postgres), so it's used here to simulate one without needing a second process.
+  it("overall health and communication-module toggles survive a simulated restart", async () => {
+    await setOverallHealthField(instanceId, "cabinetDoor", "abnormal");
+    await setCommunicationModuleField(instanceId, 5, "abnormal");
+
+    disposeDiagnosticState(instanceId);
+
+    const overall = await getOverallHealth(instanceId);
+    expect(overall.cabinetDoor).toBe("abnormal");
+    expect(overall.circuitBreakerStatus).toBe("normal");
+
+    const modules = await getCommunicationModules(instanceId);
+    expect(modules[5].comm).toBe("abnormal");
+    expect(modules[0].comm).toBe("normal");
+  });
+
+  it("per-plug toggle fields survive a simulated restart", async () => {
+    await setInterfaceBoardToggleField(instanceId, connectorRowId, "meterCommunication", "abnormal");
+    await setContactorField(instanceId, connectorRowId, "km2Status", "closed");
+
+    disposeDiagnosticState(instanceId);
+
+    const reading = await getInterfaceBoardReading(instanceId, connectorRowId);
+    expect(reading.meterCommunication).toBe("abnormal");
+    expect(reading.km2Status).toBe("closed");
+    // Untouched toggle fields still default normally.
+    expect(reading.seccCommunication).toBe("normal");
   });
 });
