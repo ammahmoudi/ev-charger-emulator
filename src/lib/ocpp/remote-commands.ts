@@ -424,6 +424,9 @@ export function registerRemoteCommandHandlers(
   async function stopTransaction(entry: OcppActiveTransaction, reason: string): Promise<void> {
     activeTransactions.delete(entry.connectorId);
     stopMeterValuesLoop(entry.connectorId);
+    // Captured before the delete below — this transaction's own starting register value, needed
+    // to report a *delta* (not the absolute register) to `onRemoteTransactionStopped` below.
+    const meterStartWh = transactionSimState.get(entry.connectorId)?.meterStartWh ?? 0;
     const { sampledValue: finalSampledValue, meterWh: meterStopWh } = await buildSampledValues(
       entry.connectorId,
       "Transaction.End",
@@ -463,7 +466,13 @@ export function registerRemoteCommandHandlers(
         await deps.onRemoteTransactionStopped(entry.connectorId, {
           transactionId: entry.transactionId,
           reason,
-          meterStopWh,
+          // This transaction's own energy delta (meterStop minus this transaction's own
+          // meterStart) — NOT the absolute cumulative register `meterStopWh` above (which is
+          // what actually goes out on the wire in the real StopTransaction call, unchanged).
+          // A caller mirroring this into a per-transaction record (e.g. a Cost-screen row) needs
+          // the delta; passing the absolute register would badly overstate every transaction
+          // after a connector's first (see AUDIT-integration.md).
+          energyWh: Math.max(0, meterStopWh - meterStartWh),
         });
       } catch (err) {
         onError(toError(err));

@@ -1,4 +1,9 @@
-import { adoptRemoteSession, startChargingSession, type ConnectorRuntimeView } from "@/lib/device-instances/connector-sessions";
+import {
+  adoptRemoteSession,
+  getMeterRegisterWh,
+  startChargingSession,
+  type ConnectorRuntimeView,
+} from "@/lib/device-instances/connector-sessions";
 import { lookupLocalAuthEntry } from "@/lib/device-instances/local-auth";
 import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
 import { prisma } from "@/lib/prisma";
@@ -62,10 +67,14 @@ export async function presentRfidCard(
   session.setConnectorStatus(connectorId, "Preparing");
   let transactionId: number;
   try {
+    // The connector's persisted cumulative register, not a hardcoded 0 — matches a real
+    // charger's `StartTransaction.meterStart` (see AUDIT-ocpp.md/AUDIT-integration.md's
+    // "reports zeros" findings; this specific call was the one spot that still hardcoded it).
+    const meterStart = Math.round(await getMeterRegisterWh(deviceInstanceId, connectorId));
     const startResponse = await callOcpp(deviceInstanceId, "StartTransaction", {
       connectorId,
       idTag,
-      meterStart: 0,
+      meterStart,
       timestamp: new Date().toISOString(),
     });
     const startStatus = (startResponse.idTagInfo as { status?: string } | undefined)?.status;

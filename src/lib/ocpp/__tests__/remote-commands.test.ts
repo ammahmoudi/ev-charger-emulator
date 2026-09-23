@@ -263,8 +263,63 @@ describe("registerRemoteCommandHandlers", () => {
       expect(onRemoteTransactionStopped).toHaveBeenCalledWith(1, {
         transactionId: 55,
         reason: "Remote",
-        meterStopWh: expect.any(Number),
+        energyWh: expect.any(Number),
       });
+
+      hookController.dispose();
+      hookSession.dispose();
+      hookClient.disconnect();
+    });
+
+    // Regression test for a real bug: the very first transaction on a fresh connector starts
+    // from register 0, so a per-transaction *delta* and the connector's *absolute* register
+    // happen to be numerically identical — hiding a bug where the absolute value was passed
+    // instead of the delta. A second transaction on the same connector (starting from a nonzero
+    // register) is the only way to actually distinguish the two.
+    it("reports each transaction's own energy delta, not the connector's cumulative register, across two transactions", async () => {
+      const energyWhValues: number[] = [];
+      const hookClient = new OcppClient({ url: server.url, reconnect: { enabled: false } });
+      const hookSession = new OcppChargePointSession(hookClient, { identity: IDENTITY, connectors: CONNECTORS });
+      hookSession.on("error", () => {});
+      const hookController = registerRemoteCommandHandlers(hookClient, hookSession, {
+        onRemoteTransactionStopped: (_connectorId, info) => {
+          energyWhValues.push(info.energyWh);
+        },
+      });
+
+      hookClient.connect();
+      const hookSocket = await server.waitForNextConnection();
+      const hookQueue = createMessageQueue(hookSocket);
+
+      const [, bootMessageId] = await hookQueue.next();
+      hookSocket.send(JSON.stringify([3, bootMessageId, { status: "Accepted", interval: 300 }]));
+      await hookQueue.next();
+      await hookQueue.next();
+
+      async function runOneTransaction(startMsgId: string, transactionId: number, stopMsgId: string): Promise<void> {
+        hookSocket.send(JSON.stringify([2, startMsgId, "RemoteStartTransaction", { connectorId: 1, idTag: "TAG1" }]));
+        const startFrames = [await hookQueue.next(), await hookQueue.next(), await hookQueue.next()];
+        const startTxCall = findByAction(startFrames, "StartTransaction") as [number, string, string, Record<string, unknown>];
+        hookSocket.send(JSON.stringify([3, startTxCall[1], { transactionId, idTagInfo: { status: "Accepted" } }]));
+        await hookQueue.next(); // Charging StatusNotification
+
+        hookSocket.send(JSON.stringify([2, stopMsgId, "RemoteStopTransaction", { transactionId }]));
+        const stopFrames = [await hookQueue.next(), await hookQueue.next()];
+        const stopTxCall = findByAction(stopFrames, "StopTransaction") as [number, string, string, Record<string, unknown>];
+        hookSocket.send(JSON.stringify([3, stopTxCall[1], {}]));
+        await hookQueue.next(); // Finishing
+        await hookQueue.next(); // Available
+      }
+
+      await runOneTransaction("delta-start-1", 70, "delta-stop-1");
+      await runOneTransaction("delta-start-2", 71, "delta-stop-2");
+
+      expect(energyWhValues).toHaveLength(2);
+      // Both transactions ran for a similarly short, near-instant duration, so their own energy
+      // deltas should be small and comparable — nowhere near "the second delta is roughly double
+      // the first" (which is what a bug reporting the *cumulative* register instead of the delta
+      // would produce, since the register keeps growing across transactions).
+      expect(energyWhValues[1]).toBeLessThan(energyWhValues[0] + 50);
 
       hookController.dispose();
       hookSession.dispose();
@@ -391,7 +446,7 @@ describe("registerRemoteCommandHandlers", () => {
       expect(onRemoteTransactionStopped).toHaveBeenCalledWith(1, {
         transactionId: 61,
         reason: "Remote",
-        meterStopWh: expect.any(Number),
+        energyWh: expect.any(Number),
       });
       expect(holdSession.getConnectorStatus(1)).toMatchObject({ status: "Finishing" });
 

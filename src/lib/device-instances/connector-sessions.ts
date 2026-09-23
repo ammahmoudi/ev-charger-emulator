@@ -6,12 +6,20 @@ import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 // bodies, never at module-evaluation time; see the two-way collision guard below.
 import { isHardwareTestOutputRunning } from "@/lib/device-instances/hardware-test-state";
 import { queueOutboxMessage } from "@/lib/device-instances/outbox";
-import { callOcpp, getOrCreateChargePointSession } from "@/lib/device-instances/runtime";
+import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
 import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
 const WH_PER_KWH = 1000;
 const MS_PER_HOUR = 3_600_000;
+/** Nominal DC bus voltage used for this module's own simulated Voltage/Current samples — matches `src/lib/ocpp/remote-commands.ts`'s constant of the same name. */
+const NOMINAL_VOLTAGE_V = 400;
+/**
+ * How often a locally/RFID-initiated real transaction (one this module reported to the CSMS —
+ * see `reportTransactionStartToCsms` below) sends `MeterValues` while `Charging`. Matches
+ * `src/lib/ocpp/remote-commands.ts`'s own default `MeterValueSampleInterval` fallback.
+ */
+const METER_VALUES_INTERVAL_MS = 60_000;
 /**
  * How long a connector stays in `Preparing` (cable plugged in, card presented, authorizing)
  * before the simulated session promotes to `Charging` and the meter starts. The real OC10
@@ -103,6 +111,134 @@ function currentEnergyWh(chargeRateKw: number, startedAt: Date, now: Date): numb
   return round2((chargeRateKw * WH_PER_KWH * elapsedMs) / MS_PER_HOUR);
 }
 
+/**
+ * A connector's persisted cumulative energy register (Wh): the sum of every completed
+ * `DeviceInstanceSession`'s energy for it. Used as `meterStart`/the running total in
+ * `MeterValues` when this module reports a real transaction to the CSMS (see
+ * `reportTransactionStartToCsms` below), so a connector's second-and-later transactions report a
+ * growing register like a real charger's, not a value that resets to 0 every session. Mirrors
+ * `diagnostics.ts::computeEnergyTotal`'s aggregation; kept separate to avoid a cross-module
+ * dependency for a one-line query.
+ */
+export async function getMeterRegisterWh(deviceInstanceId: string, connectorId: number): Promise<number> {
+  const { _sum } = await prisma.deviceInstanceSession.aggregate({
+    where: { deviceInstanceId, connectorId },
+    _sum: { energyWh: true },
+  });
+  return _sum.energyWh ?? 0;
+}
+
+/**
+ * Builds a `MeterValues`/`StopTransaction.transactionData` `sampledValue` array for a
+ * connector-sessions-initiated real transaction — same measurand/location/phase/unit shape as
+ * `src/lib/ocpp/remote-commands.ts`'s own simulation (see AUDIT-ocpp.md), duplicated rather than
+ * imported so `src/lib/ocpp` stays independent of this module's Prisma-backed persistence.
+ */
+function buildLocalSampledValues(
+  meterWh: number,
+  chargeRateKw: number,
+  context: "Sample.Periodic" | "Transaction.End",
+): Record<string, string>[] {
+  const powerW = chargeRateKw * 1000;
+  const currentA = NOMINAL_VOLTAGE_V > 0 ? powerW / NOMINAL_VOLTAGE_V : 0;
+  return [
+    {
+      value: String(Math.round(meterWh)),
+      context,
+      format: "Raw",
+      measurand: "Energy.Active.Import.Register",
+      location: "Body",
+      phase: "L1",
+      unit: "Wh",
+    },
+    { value: NOMINAL_VOLTAGE_V.toFixed(1), context, format: "Raw", measurand: "Voltage", location: "Cable", phase: "L1", unit: "V" },
+    { value: currentA.toFixed(1), context, format: "Raw", measurand: "Current.Import", location: "Cable", phase: "L1", unit: "A" },
+    { value: powerW.toFixed(1), context, format: "Raw", measurand: "Power.Active.Import", location: "Cable", phase: "L1", unit: "W" },
+  ];
+}
+
+/**
+ * Per-connector periodic `MeterValues` timers for connector-sessions-initiated real transactions
+ * — `globalThis`-backed to survive Next.js dev-server hot reloads, same pattern as
+ * `runtime.ts`'s connection registry. Deliberately separate from `src/lib/ocpp/remote-
+ * commands.ts`'s own (unrelated) meter-values timer, which already runs for CSMS-
+ * `RemoteStartTransaction`-initiated sessions — `adoptRemoteSession`'s `skipMeterValuesLoop`
+ * option keeps the two from ever double-reporting the same connector.
+ */
+const globalForMeterLoops = globalThis as unknown as {
+  deviceInstanceMeterValueLoops: Map<string, ReturnType<typeof setInterval>> | undefined;
+};
+const meterValueLoops = globalForMeterLoops.deviceInstanceMeterValueLoops ?? new Map<string, ReturnType<typeof setInterval>>();
+if (process.env.NODE_ENV !== "production") {
+  globalForMeterLoops.deviceInstanceMeterValueLoops = meterValueLoops;
+}
+
+function meterLoopKey(deviceInstanceId: string, connectorId: number): string {
+  return `${deviceInstanceId}:${connectorId}`;
+}
+
+function stopMeterValuesLoop(deviceInstanceId: string, connectorId: number): void {
+  const key = meterLoopKey(deviceInstanceId, connectorId);
+  const timer = meterValueLoops.get(key);
+  if (timer) {
+    clearInterval(timer);
+    meterValueLoops.delete(key);
+  }
+}
+
+async function sendConnectorMeterValues(deviceInstanceId: string, connectorId: number): Promise<void> {
+  try {
+    const state = await prisma.deviceInstanceConnectorState.findUnique({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
+    });
+    if (
+      !state ||
+      state.status !== "Charging" ||
+      !state.activeIsRemote ||
+      state.activeTransactionId == null ||
+      !state.activeChargeRateKw ||
+      !state.activeStartedAt
+    ) {
+      stopMeterValuesLoop(deviceInstanceId, connectorId);
+      return;
+    }
+    const registerBase = await getMeterRegisterWh(deviceInstanceId, connectorId);
+    const meterWh = registerBase + currentEnergyWh(state.activeChargeRateKw, state.activeStartedAt, new Date());
+    await callOcpp(deviceInstanceId, "MeterValues", {
+      connectorId,
+      transactionId: state.activeTransactionId,
+      meterValue: [
+        { timestamp: new Date().toISOString(), sampledValue: buildLocalSampledValues(meterWh, state.activeChargeRateKw, "Sample.Periodic") },
+      ],
+    });
+  } catch (err) {
+    console.error(`Failed to send MeterValues for ${deviceInstanceId} connector ${connectorId}:`, err);
+  }
+}
+
+/**
+ * Starts (idempotently) a periodic real `MeterValues` sender for a connector-sessions-initiated
+ * real transaction. No-op if already running for this connector. Called only from the two places
+ * that actually mint such a transaction (`resolvePreparingPromotion`'s CSMS report, and
+ * `adoptRemoteSession` when not `skipMeterValuesLoop`) — deliberately *not* re-armed
+ * opportunistically from a read path, since a read path can't tell "this connector's real
+ * transaction is this module's to report" apart from "it's a CSMS-`RemoteStartTransaction`
+ * one, already served by `src/lib/ocpp/remote-commands.ts`'s own loop" without risking starting
+ * a second, duplicate loop for the latter. Known limitation: a process restart mid-transaction
+ * silently stops this loop for the rest of that transaction (the eventual `StopTransaction` still
+ * reports the fully-accumulated correct total, since that's computed fresh from
+ * `activeStartedAt`, not from the timer) — the same accepted restart-survival gap
+ * `src/lib/ocpp/remote-commands.ts`'s own timer already has (see AUDIT-ocpp.md).
+ */
+function ensureMeterValuesLoopRunning(deviceInstanceId: string, connectorId: number): void {
+  const key = meterLoopKey(deviceInstanceId, connectorId);
+  if (meterValueLoops.has(key)) return;
+  const timer = setInterval(() => {
+    void sendConnectorMeterValues(deviceInstanceId, connectorId);
+  }, METER_VALUES_INTERVAL_MS);
+  meterValueLoops.set(key, timer);
+}
+
 async function getOrCreateState(deviceInstanceId: string, connectorId: number) {
   return prisma.deviceInstanceConnectorState.upsert({
     where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
@@ -151,23 +287,26 @@ async function resolvePreparingPromotion(
   if (state.status !== "Preparing" || !state.activeStartedAt) return null;
   if (now.getTime() - state.activeStartedAt.getTime() < PREPARING_DURATION_MS) return null;
 
-  const transactionId = state.transactionCounter + 1;
+  const localTransactionId = state.transactionCounter + 1;
   const chargingStartedAt = new Date(state.activeStartedAt.getTime() + PREPARING_DURATION_MS);
 
   // Guard against two concurrent pollers both promoting the same connector (see AUDIT-state.md):
   // only the caller whose conditional update actually matches a still-`Preparing` row logs events
-  // and notifies the OCPP session; a loser just returns the winner's already-updated row.
+  // and notifies the OCPP session; a loser just returns the winner's already-updated row. This
+  // also protects the real-CSMS reporting below: only the winner ever calls out, so exactly one
+  // StartTransaction is sent per local transaction regardless of how many concurrent pollers hit
+  // this function around the same moment.
   const { count } = await prisma.deviceInstanceConnectorState.updateMany({
     where: { deviceInstanceId, connectorId: state.connectorId, status: "Preparing" },
     data: {
       status: "Charging",
-      activeTransactionId: transactionId,
+      activeTransactionId: localTransactionId,
       activeStartedAt: chargingStartedAt,
-      transactionCounter: transactionId,
+      transactionCounter: localTransactionId,
     },
   });
 
-  const updated = await prisma.deviceInstanceConnectorState.findUniqueOrThrow({
+  let updated = await prisma.deviceInstanceConnectorState.findUniqueOrThrow({
     where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId: state.connectorId } },
   });
   if (count === 0) return updated;
@@ -177,10 +316,64 @@ async function resolvePreparingPromotion(
   await logDeviceInstanceEvent(
     deviceInstanceId,
     "TRANSACTION_STARTED",
-    `${label}: transaction #${transactionId} started (card ${state.activeIdTag})`,
+    `${label}: transaction #${localTransactionId} started (card ${state.activeIdTag})`,
     chargingStartedAt,
   );
   await notifySessionStatus(deviceInstanceId, state.connectorId, "Charging");
+
+  // Report this transaction to the CSMS if connected — a real charger reports every session it
+  // starts once online, whether authorized locally (master card, local auth list) or online (see
+  // `rfid.ts`'s own-authorized path, which calls `startChargingSession` too), not only
+  // CSMS-initiated ones. Closes the "the emulator's primary Home-screen flow is invisible to the
+  // CSMS" gap — see AUDIT-integration.md. Done *after* winning the race above (not before) so
+  // exactly one StartTransaction goes out even under concurrent pollers.
+  //
+  // Known limitation: if a user hits Stop in the brief window between here and the CSMS's
+  // response, `stopChargingSession` may run against the pre-report row (`activeIsRemote: false`)
+  // and skip sending `StopTransaction`, leaving the transaction open at the CSMS. The window is a
+  // single round-trip (typically well under a second); accepted rather than adding full
+  // request-level locking for this pass.
+  if (updated.activeIdTag && getRuntimeConnectionState(deviceInstanceId) === "connected") {
+    const meterStart = Math.round(await getMeterRegisterWh(deviceInstanceId, state.connectorId));
+    const startTransactionPayload = {
+      connectorId: state.connectorId,
+      idTag: updated.activeIdTag,
+      meterStart,
+      timestamp: chargingStartedAt.toISOString(),
+    };
+    try {
+      const response = await callOcpp(deviceInstanceId, "StartTransaction", startTransactionPayload);
+      const realTransactionId = Number(response.transactionId);
+      updated = await prisma.deviceInstanceConnectorState.update({
+        where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId: state.connectorId } },
+        data: {
+          activeTransactionId: realTransactionId,
+          activeIsRemote: true,
+          transactionCounter: Math.max(updated.transactionCounter, realTransactionId),
+        },
+      });
+      ensureMeterValuesLoopRunning(deviceInstanceId, state.connectorId);
+      await logDeviceInstanceEvent(
+        deviceInstanceId,
+        "REMOTE_COMMAND",
+        `${label}: reported transaction #${realTransactionId} to CSMS (meterStart ${meterStart} Wh)`,
+        chargingStartedAt,
+      );
+    } catch (err) {
+      // Couldn't reach the CSMS despite nominally being connected (e.g. a transient send
+      // failure) — queue it for replay on reconnect, the same "local storage" pattern
+      // `stopChargingSession` already uses for its own StopTransaction, and keep the local
+      // transaction id for now (this transaction stays `activeIsRemote: false` until/unless a
+      // future pass reconciles a queued StartTransaction's eventual real id).
+      await queueOutboxMessage(deviceInstanceId, "StartTransaction", startTransactionPayload);
+      await logDeviceInstanceEvent(
+        deviceInstanceId,
+        "FAULT",
+        `${label}: failed to report StartTransaction to CSMS, queued for retry (${err instanceof Error ? err.message : String(err)})`,
+        chargingStartedAt,
+      );
+    }
+  }
 
   return updated;
 }
@@ -398,7 +591,19 @@ export async function startChargingSession(
 export async function adoptRemoteSession(
   deviceInstanceId: string,
   connectorId: number,
-  options: { idTag: string; transactionId: number; chargeRateKw: number },
+  options: {
+    idTag: string;
+    transactionId: number;
+    chargeRateKw: number;
+    /**
+     * Set when the caller (`device-instances/runtime.ts`, for a CSMS-`RemoteStartTransaction`)
+     * already runs its own periodic `MeterValues` sender for this transaction
+     * (`src/lib/ocpp/remote-commands.ts`'s own timer) — skips starting this module's *second*
+     * loop for the same connector, which would otherwise double-report. Omit (or `false`) for
+     * `rfid.ts`'s own-authorized RFID path, which has no other `MeterValues` sender.
+     */
+    skipMeterValuesLoop?: boolean;
+  },
 ): Promise<ConnectorRuntimeView> {
   assertNoHardwareTestCollision(deviceInstanceId, connectorId);
   const connectors = await loadOrderedConnectors(deviceInstanceId);
@@ -431,6 +636,10 @@ export async function adoptRemoteSession(
     `${label}: transaction #${options.transactionId} started (card ${options.idTag}, via CSMS)`,
     startedAt,
   );
+
+  if (!options.skipMeterValuesLoop) {
+    ensureMeterValuesLoopRunning(deviceInstanceId, connectorId);
+  }
 
   const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
@@ -487,6 +696,8 @@ export async function stopChargingSession(
     energyWhOverride?: number;
   },
 ): Promise<StopSessionResult> {
+  stopMeterValuesLoop(deviceInstanceId, connectorId);
+
   const connectors = await loadOrderedConnectors(deviceInstanceId);
   const now = new Date();
   let state = await getOrCreateState(deviceInstanceId, connectorId);
@@ -510,9 +721,17 @@ export async function stopChargingSession(
   const goesThroughFinishing = state.activeTransactionId != null && !isFault;
 
   if (state.activeIsRemote && state.activeTransactionId != null && !options.skipCsmsNotify) {
+    // `meterStop` must be the connector's *absolute* register, not this session's own delta
+    // (`energyWh`) — CitrineOS (and any spec-following CSMS) computes
+    // `totalKwh = (meterStop - meterStart) / 1000`, and this transaction's `meterStart` was the
+    // register baseline at start time (see `resolvePreparingPromotion`/`rfid.ts`'s own
+    // `StartTransaction` call), not 0. Recomputing the same aggregate here is safe: this
+    // session's own row hasn't been inserted into `DeviceInstanceSession` yet, so the sum is
+    // identical to what was used as `meterStart`.
+    const meterStop = Math.round((await getMeterRegisterWh(deviceInstanceId, connectorId)) + energyWh);
     const stopTransactionPayload = {
       transactionId: state.activeTransactionId,
-      meterStop: Math.round(energyWh),
+      meterStop,
       timestamp: stoppedAt.toISOString(),
       reason: options.stopCause,
     };
