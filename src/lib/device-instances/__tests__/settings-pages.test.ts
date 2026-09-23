@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paginateBySortOrder, splitIntoColumns } from "../settings-pages";
+import { formatFirmwareDate, paginateBySortOrder, splitIntoColumns } from "../settings-pages";
 
 function items(sortOrders: number[]) {
   return sortOrders.map((sortOrder) => ({ sortOrder }));
@@ -48,5 +48,27 @@ describe("splitIntoColumns", () => {
 
   it("returns two empty arrays for an empty list", () => {
     expect(splitIntoColumns([])).toEqual([[], []]);
+  });
+});
+
+describe("formatFirmwareDate", () => {
+  it("formats an ISO updatedAt as \"YYYY y MM m DD d\", matching the reference screenshot's style", () => {
+    expect(formatFirmwareDate({ value: "403", updatedAt: "2025-06-26T10:00:00.000Z" })).toBe("2025 y 06 m 26 d");
+  });
+
+  it("pads single-digit month/day", () => {
+    expect(formatFirmwareDate({ value: "403", updatedAt: "2025-01-05T00:00:00.000Z" })).toBe("2025 y 01 m 05 d");
+  });
+
+  it("returns \"—\" when the value is still at the model default (null)", () => {
+    expect(formatFirmwareDate({ value: null, updatedAt: "2025-06-26T10:00:00.000Z" })).toBe("—");
+  });
+
+  it("returns \"—\" when there's no updatedAt", () => {
+    expect(formatFirmwareDate({ value: "403", updatedAt: null })).toBe("—");
+  });
+
+  it("returns \"—\" when the parameter itself is undefined (key not found)", () => {
+    expect(formatFirmwareDate(undefined)).toBe("—");
   });
 });

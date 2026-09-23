@@ -27,3 +27,17 @@ export function splitIntoColumns<T>(items: T[]): [T[], T[]] {
   const half = Math.ceil(items.length / 2);
   return [items.slice(0, half), items.slice(half)];
 }
+
+/**
+ * Formats a firmware parameter's `updatedAt` to match the real device's Setting > Device tab
+ * "Date" fields (see docs/device-reference/PEVC3107E/screenshots/05-settings-device.png, e.g.
+ * "2025 y 06 m 26 d"). This instance has no dedicated install-date field — reusing the
+ * firmware-parameter row's own `updatedAt` (see serialize.ts) is a reasonable proxy for "when
+ * this firmware value was installed/set". Returns "—" for a value still at the model default
+ * (`value` is `null`) or with no recorded `updatedAt`.
+ */
+export function formatFirmwareDate(param: { value: string | null; updatedAt: string | null } | undefined): string {
+  if (!param?.value || !param.updatedAt) return "—";
+  const d = new Date(param.updatedAt);
+  return `${d.getFullYear()} y ${String(d.getMonth() + 1).padStart(2, "0")} m ${String(d.getDate()).padStart(2, "0")} d`;
+}
