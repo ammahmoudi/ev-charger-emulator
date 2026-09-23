@@ -161,3 +161,101 @@ Real-DB verification of this exact merged/fixed state, the live-CSMS connectivit
 pushing/opening a PR were delegated to a herdr agent with genuine Docker/network access (this
 sandbox has none — confirmed: DNS resolution itself fails). See that agent's own report for
 results.
+
+## Round 3 — "the primary Home-screen flow was invisible to the CSMS"
+
+Following up on the user's explicit push to fully support manual start, remote start,
+authorizations, and config end to end, and a discovery mid-way through this pass that this
+sandbox **can** reach the local Postgres container via `host.docker.internal` (just not via
+`localhost`/`127.0.0.1`, nor any external host) — so this round's DB-backed tests below were
+actually run for real, not just written.
+
+### The core gap: local/RFID-authorized sessions never reached the CSMS
+
+`connector-sessions.ts::startChargingSession` (the Home screen's "Charging" button, reached via
+either the master card or a `local-auth.ts`-listed card in `rfid.ts::presentRfidCard`) is a pure
+local simulation — it never sent `Authorize`/`StartTransaction`/`MeterValues`/`StopTransaction`
+to the CSMS, even while fully `CONNECTED`. Only two paths ever produced real transaction traffic:
+a CSMS-initiated `RemoteStartTransaction`, and an *online* (not locally-authorized) RFID swipe.
+Concretely, this meant the emulator's most-used demo path — clicking "Charging" on the Home
+screen — was invisible to CitrineOS's Transactions module, directly undercutting "CSMS can
+exercise ALL its functions."
+
+**Fix**: `resolvePreparingPromotion` (the function that turns `Preparing` into `Charging` for
+every local session, regardless of which authorization path reached it) now, once it's won the
+promotion race, checks `getRuntimeConnectionState`; if `CONNECTED`, it sends a real
+`StartTransaction` (using the connector's persisted cumulative meter register as `meterStart` —
+see below), adopts the CSMS's own `transactionId`, marks the row `activeIsRemote`, and starts a
+periodic `MeterValues` sender. `stopChargingSession` already knew how to send a real
+`StopTransaction` for an `activeIsRemote` session (round 1) — that machinery now fires for these
+sessions too, automatically. A failed report (nominally connected but the call itself fails) is
+queued via the existing offline outbox, same "local storage" pattern as an offline `StopTransaction`.
+
+This closes the gap for **every** local authorization path in one place — master card, local
+auth list, and (unchanged) the existing CSMS-remote and online-RFID paths — since they all funnel
+through this same promotion function.
+
+### A real correctness bug found and fixed along the way: absolute register vs. per-transaction delta
+
+While wiring `meterStop` for the fix above, found that `onRemoteTransactionStopped`'s
+`meterStopWh` (added in round 1) was the connector's **absolute cumulative register**, but the
+receiving side (`stopChargingSession`, via `energyWhOverride`) treated it as this transaction's
+own **delta** — storing it directly as `DeviceInstanceSession.energyWh` and using it for cost
+calculation. For a connector's first-ever transaction (register starts at 0) delta and absolute
+value coincide, hiding the bug; a connector's **second** transaction would have shown a wildly
+wrong "session energy" (the entire register, not just what was consumed this session) on the Cost
+screen, with cost computed on that inflated figure. Fixed at the source
+(`src/lib/ocpp/remote-commands.ts::stopTransaction`): the hook now receives `energyWh` (this
+transaction's own delta, `meterStopWh - meterStartWh`), not the absolute register — the real
+`StopTransaction.meterStop` sent on the wire is unchanged (still correctly absolute). Added a
+regression test running two transactions back-to-back on the same connector (the only way to
+actually distinguish delta from absolute, since a single transaction can't).
+
+`stopChargingSession`'s own `meterStop` (for the two paths that call `callOcpp("StopTransaction")`
+directly — this round's new local-report path, and the existing online-RFID path) had the mirror
+version of the same class of bug: it sent `energyWh` (a delta) as `meterStop` directly, which
+would make CitrineOS's `totalKwh = meterStop - meterStart` compute negative for any transaction
+after a connector's first. Fixed by adding the connector's register baseline back before sending.
+
+Also fixed in passing: `rfid.ts`'s online-RFID `StartTransaction` call hardcoded `meterStart: 0`
+— the exact same "reports zeros" bug class from round 1, just in a spot the earlier passes didn't
+reach. Now uses the same persisted register (`getMeterRegisterWh`, newly exported from
+`connector-sessions.ts`).
+
+### Other fixes this round
+
+- **`BootNotification` was missing `firmwareVersion`.** `runtime.ts::createEntry` never read the
+  board's current firmware-version parameter (tracked since round 1's maintenance persistence
+  work) into the `OcppChargePointSession` identity. Fixed: `getOrCreateEntry` now fetches it once
+  per instance's first connection. Known follow-up: it's snapshotted at connection time — a
+  firmware upgrade completing on an already-open connection doesn't force a reconnect today, so
+  BootNotification wouldn't reflect a mid-session upgrade until the next manual reconnect (a real
+  charger would typically reboot after an upgrade, which is when it would resend this).
+- **QR codes weren't labeled per EVSE.** The QR screen showed two codes as generic "1"/"2" with
+  no indication of which physical plug each belonged to, despite `qrCodeUrl1`/`qrCodeUrl2`
+  corresponding 1:1 to the model's connectors in order (the same convention used everywhere else
+  in the app). Now labeled by each connector's own `label` (e.g. "Plug A"/"Plug B"). Note: unlike
+  every other screen, **no real device screenshot or manual page exists for the QR screen at
+  all** (checked `docs/device-reference/PEVC3107E/README.md` — it's absent from the mapping
+  table) — this is a reasonable design, not a verified match to real hardware.
+
+### Known limitation carried forward
+
+A tight race: if a user hits Stop in the brief window between `resolvePreparingPromotion` winning
+its promotion race and the real `StartTransaction` round-trip resolving, `stopChargingSession`
+may run against the pre-report row (`activeIsRemote: false` still) and skip sending
+`StopTransaction`, leaving the transaction open at the CSMS. The window is one round-trip
+(sub-second in practice); accepted rather than adding full request-level locking this pass.
+
+### Testing (round 3)
+
+Ran with real `DATABASE_URL` (`host.docker.internal:5442`, this sandbox's Postgres reachability
+quirk — `localhost`/`127.0.0.1` don't work here, but this hostname does): **`npx vitest run` —
+25/25 files, 219/219 tests passing** (up from 217; 2 new integration tests covering the
+first-vs-second-transaction `meterStart`/`meterStop` register behavior against a real mock CSMS,
+plus a new `src/lib/ocpp` regression test for the delta-vs-absolute bug using two transactions).
+`npx tsc --noEmit` — clean (no errors at all this time, including the previously-pre-existing
+`layout.tsx` one, likely from an already-generated `.next/types`). `npx eslint .` — clean.
+
+Still not done from this sandbox: the live-CSMS test and push/PR, both blocked by Claude Code's
+own safety classifier pending the user's explicit decision (see the conversation, not this file).

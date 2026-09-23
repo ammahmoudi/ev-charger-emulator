@@ -15,7 +15,13 @@ const QR_PARAMETER_KEYS = ["qrCodeUrl1", "qrCodeUrl2"] as const;
  * code per non-empty `qrCodeUrl1`/`qrCodeUrl2` instance parameter — the same two config keys a
  * real CSMS can set remotely via `ChangeConfiguration` (both are ordinary `DeviceModelParameter`
  * rows, so `PrismaConfigurationStore` reads/writes them like any other key), or an operator can
- * set from Settings > Other.
+ * set from Settings > Other. `qrCodeUrl1`/`qrCodeUrl2` correspond 1:1, in order, to the model's
+ * connectors (matching every other per-plug numbering in this app — `connectors.ts`'s
+ * `orderModelConnectors`) — labeled here by that connector's own `label` (e.g. "Plug A"/"Plug B")
+ * instead of a bare "1"/"2", so it's unambiguous which EVSE each code is for. Note: unlike every
+ * other screen in this app, no real device screenshot or manual page exists for this one (see
+ * docs/device-reference/PEVC3107E/README.md) — this layout is a reasonable design, not a
+ * verified match to the real device.
  */
 export default function QrCodePage() {
   const params = useParams<{ id: string }>();
@@ -83,6 +89,11 @@ export default function QrCodePage() {
   }
 
   const configuredKeys = QR_PARAMETER_KEYS.filter((key) => qrImages[key]);
+  /** `qrCodeUrl1`/`qrCodeUrl2` map by position to the model's connectors, in the same order used everywhere else. */
+  const connectorLabelForKey = (key: (typeof QR_PARAMETER_KEYS)[number]): string => {
+    const index = QR_PARAMETER_KEYS.indexOf(key);
+    return instance.connectors[index]?.label ?? `Connector ${index + 1}`;
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
@@ -104,13 +115,15 @@ export default function QrCodePage() {
         <div className="flex flex-wrap gap-6">
           {configuredKeys.map((key) => {
             const url = instance.parameters.find((p) => p.key === key)?.value ?? "";
+            const connectorLabel = connectorLabelForKey(key);
             return (
               <div
                 key={key}
                 className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
               >
+                <p className="text-sm font-medium text-black dark:text-zinc-50">{connectorLabel}</p>
                 {/* eslint-disable-next-line @next/next/no-img-element -- data: URL, not an optimizable remote image */}
-                <img src={qrImages[key]} alt={`QR code for ${url}`} width={220} height={220} />
+                <img src={qrImages[key]} alt={`QR code for ${connectorLabel} — ${url}`} width={220} height={220} />
                 <p className="max-w-[220px] break-all text-center text-xs text-zinc-500">{url}</p>
               </div>
             );
