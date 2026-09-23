@@ -8,7 +8,13 @@ import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DiagnosticField } from "@/components/device-instances/DiagnosticField";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
-import { connectorDisplayLabel, type HealthStatus, type OverallHealthView } from "@/lib/device-instances/diagnostics-types";
+import {
+  connectorDisplayLabel,
+  orderConnectorsByEvse,
+  type HealthStatus,
+  type OverallHealthView,
+} from "@/lib/device-instances/diagnostics-types";
+import type { ConnectorRuntimeView } from "@/lib/device-instances/types";
 import { useDeviceInstanceConnectors } from "@/lib/device-instances/useDeviceInstanceConnectors";
 
 const LABELS: Record<string, string> = {
@@ -22,6 +28,8 @@ export default function StatusDiagnosticsPage() {
   const { header, connectors, notFound } = useDeviceInstanceConnectors(instanceId);
 
   const [overall, setOverall] = useState<OverallHealthView | null>(null);
+  const [runtimeConnectors, setRuntimeConnectors] = useState<ConnectorRuntimeView[] | null>(null);
+  const [pendingUnlock, setPendingUnlock] = useState<number | null>(null);
 
   async function load() {
     const res = await fetch(`/api/device-instances/${instanceId}/diagnostics`);
@@ -30,11 +38,42 @@ export default function StatusDiagnosticsPage() {
     setOverall(data.overall);
   }
 
+  /**
+   * The diagnostics screens address a connector by its DB `deviceModelConnector.id` (see
+   * `useDeviceInstanceConnectors`), but the Lock action shares the numeric OCPP `connectorId`
+   * scheme used everywhere else (Home/Cost/Lock) — loaded separately here and zipped with
+   * `connectors` by (evseIndex, connectorIndex) order, which both endpoints agree on.
+   */
+  async function loadRuntimeConnectors() {
+    const res = await fetch(`/api/device-instances/${instanceId}/connectors`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setRuntimeConnectors(data.connectors);
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on route param change, not derived state
     load();
+    loadRuntimeConnectors();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
+
+  const orderedConnectors = connectors ? orderConnectorsByEvse(connectors) : null;
+  const runtimeByOrder = new Map(orderedConnectors?.map((c, i) => [c.id, runtimeConnectors?.[i]]));
+
+  async function handleUnlock(connectorId: number) {
+    setPendingUnlock(connectorId);
+    try {
+      const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/lock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locked: false }),
+      });
+      if (res.ok) await loadRuntimeConnectors();
+    } finally {
+      setPendingUnlock(null);
+    }
+  }
 
   async function toggle(field: keyof OverallHealthView, next: HealthStatus) {
     const res = await fetch(`/api/device-instances/${instanceId}/diagnostics`, {
@@ -153,15 +192,30 @@ export default function StatusDiagnosticsPage() {
 
           {connectors.length > 0 ? (
             <div className="flex flex-wrap gap-3">
-              {connectors.map((connector) => (
-                <Link
-                  key={connector.id}
-                  href={`/instances/${instanceId}/status/plugs/${connector.id}`}
-                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                >
-                  {connectorDisplayLabel(connector)} details
-                </Link>
-              ))}
+              {connectors.map((connector) => {
+                const runtime = runtimeByOrder.get(connector.id);
+                const label = connectorDisplayLabel(connector);
+                return (
+                  <div key={connector.id} className="flex gap-2">
+                    <Link
+                      href={`/instances/${instanceId}/status/plugs/${connector.id}`}
+                      className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                    >
+                      {label} details
+                    </Link>
+                    {runtime ? (
+                      <button
+                        type="button"
+                        disabled={!runtime.locked || pendingUnlock === runtime.connectorId}
+                        onClick={() => handleUnlock(runtime.connectorId)}
+                        className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:bg-zinc-900 dark:text-blue-400 dark:hover:bg-blue-950"
+                      >
+                        {label} unlock
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </div>

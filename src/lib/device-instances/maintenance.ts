@@ -33,6 +33,8 @@ async function loadModelConnectors(instanceId: string): Promise<OrderedDeviceMod
 
 /** Full Maintenance-tab state: firmware version, live connector runtime state, and event/session counts. */
 export async function getMaintenanceState(instanceId: string) {
+  await resolveStaleFirmwareUpgrade(instanceId);
+
   const [firmwareParameter, connectors, events, sessions] = await Promise.all([
     getFirmwareParameter(instanceId),
     listConnectorStates(instanceId),
@@ -140,10 +142,62 @@ async function setConnectorsStatus(
 }
 
 /**
+ * Finishes an in-flight firmware upgrade: flips connectors back to Available and bumps the
+ * firmware version. Guarded by a conditional update on `DeviceInstance.firmwareUpgradeStartedAt`
+ * (cleared atomically here) so it's safe to call from both the in-memory completion timer and
+ * `resolveStaleFirmwareUpgrade` without double-completing (e.g. a restart racing the original
+ * timer's last moment).
+ */
+async function completeFirmwareUpgrade(instanceId: string, connectors: OrderedDeviceModelConnector[]): Promise<void> {
+  const { count } = await prisma.deviceInstance.updateMany({
+    where: { id: instanceId, firmwareUpgradeStartedAt: { not: null } },
+    data: { firmwareUpgradeStartedAt: null },
+  });
+  if (count === 0) return;
+
+  await setConnectorsStatus(instanceId, connectors, "Available");
+  const firmwareParameter = await getFirmwareParameter(instanceId);
+  let newVersion: string | null = null;
+  if (firmwareParameter) {
+    newVersion = bumpFirmwareVersion(firmwareParameter.value ?? "0");
+    await prisma.deviceInstanceParameter.update({ where: { id: firmwareParameter.id }, data: { value: newVersion } });
+  }
+  await logDeviceInstanceEvent(
+    instanceId,
+    "MAINTENANCE",
+    newVersion ? `Board upgrade completed (firmware v${newVersion})` : "Board upgrade completed",
+  );
+}
+
+/**
+ * Detects a firmware upgrade that was left in-flight (`DeviceInstance.firmwareUpgradeStartedAt`
+ * set) with no owning in-memory timer in this process — e.g. the process restarted mid-upgrade,
+ * losing `upgradeTimers`' `setTimeout` — and, once its duration has actually elapsed, completes
+ * it immediately instead of leaving connectors stuck `Unavailable` forever. Called from
+ * `getMaintenanceState` (the read path the Maintenance tab polls), mirroring how
+ * `connector-sessions.ts`'s promotions are resolved lazily on read rather than via a background job.
+ */
+async function resolveStaleFirmwareUpgrade(instanceId: string): Promise<void> {
+  if (upgradeTimers.has(instanceId)) return; // A timer in this process already owns completion.
+
+  const instance = await prisma.deviceInstance.findUnique({
+    where: { id: instanceId },
+    select: { firmwareUpgradeStartedAt: true },
+  });
+  if (!instance?.firmwareUpgradeStartedAt) return;
+  if (Date.now() - instance.firmwareUpgradeStartedAt.getTime() < FIRMWARE_UPGRADE_DURATION_MS) return;
+
+  const connectors = await loadModelConnectors(instanceId);
+  await completeFirmwareUpgrade(instanceId, connectors);
+}
+
+/**
  * Simulates a firmware ("board program") upgrade: connectors go Unavailable immediately, then
  * flip back to Available and the firmware version bumps once FIRMWARE_UPGRADE_DURATION_MS has
  * elapsed. Returns immediately after marking connectors Unavailable; callers should poll
- * getMaintenanceState() to observe completion.
+ * getMaintenanceState() to observe completion. `firmwareUpgradeStartedAt` is persisted so a
+ * process restart mid-upgrade can be detected and finished by `resolveStaleFirmwareUpgrade`
+ * instead of leaving connectors stuck `Unavailable`.
  */
 export async function startFirmwareUpgrade(instanceId: string) {
   const connectors = await loadModelConnectors(instanceId);
@@ -152,31 +206,14 @@ export async function startFirmwareUpgrade(instanceId: string) {
   if (existingTimer) clearTimeout(existingTimer);
 
   await setConnectorsStatus(instanceId, connectors, "Unavailable");
+  await prisma.deviceInstance.update({ where: { id: instanceId }, data: { firmwareUpgradeStartedAt: new Date() } });
   await logDeviceInstanceEvent(instanceId, "MAINTENANCE", "Board upgrade started");
 
   const timer = setTimeout(() => {
     upgradeTimers.delete(instanceId);
-    void (async () => {
-      try {
-        await setConnectorsStatus(instanceId, connectors, "Available");
-        const firmwareParameter = await getFirmwareParameter(instanceId);
-        let newVersion: string | null = null;
-        if (firmwareParameter) {
-          newVersion = bumpFirmwareVersion(firmwareParameter.value ?? "0");
-          await prisma.deviceInstanceParameter.update({
-            where: { id: firmwareParameter.id },
-            data: { value: newVersion },
-          });
-        }
-        await logDeviceInstanceEvent(
-          instanceId,
-          "MAINTENANCE",
-          newVersion ? `Board upgrade completed (firmware v${newVersion})` : "Board upgrade completed",
-        );
-      } catch {
-        // Instance may have been deleted while the upgrade delay was pending.
-      }
-    })();
+    void completeFirmwareUpgrade(instanceId, connectors).catch(() => {
+      // Instance may have been deleted while the upgrade delay was pending.
+    });
   }, FIRMWARE_UPGRADE_DURATION_MS);
 
   upgradeTimers.set(instanceId, timer);

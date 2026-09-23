@@ -4,12 +4,28 @@ export { InMemoryConfigurationStore } from "./in-memory-configuration-store";
 export { registerRemoteCommandHandlers } from "./remote-commands";
 export {
   type OcppActiveTransaction,
+  type OcppCancelReservationStatus,
   type OcppChangeConfigurationStatus,
+  type OcppChargingProfileEntry,
+  type OcppChargingProfileStore,
+  type OcppClearChargingProfileStatus,
   type OcppConfigurationEntry,
   type OcppConfigurationStore,
+  type OcppDataTransferHandler,
+  type OcppDataTransferStatus,
+  type OcppIdTagInfo,
+  type OcppIdTagStatus,
+  type OcppLocalAuthListStore,
+  type OcppLocalListEntry,
+  type OcppReservation,
+  type OcppReservationStore,
+  type OcppReserveNowStatus,
+  type OcppSendLocalListStatus,
+  type OcppSetChargingProfileStatus,
   type RemoteCommandHandlers,
   type RemoteCommandHandlersDeps,
 } from "./remote-command-types";
+export { type OcppFirmwareStatus } from "./firmware";
 export { OcppChargePointSession } from "./session";
 export {
   type OcppBootStatus,
