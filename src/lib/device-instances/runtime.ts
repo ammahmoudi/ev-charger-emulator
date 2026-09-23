@@ -56,7 +56,7 @@ async function writeStatus(
   }
 }
 
-function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
+function createEntry(instance: InstanceWithConnectors, firmwareVersion: string | undefined): RuntimeEntry {
   const client = new OcppClient({ url: instance.csmsUrl });
   const session = new OcppChargePointSession(client, {
     identity: {
@@ -67,6 +67,15 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
       chargePointVendor: instance.deviceModel.brand ?? instance.deviceModel.manufacturer,
       chargePointModel: instance.deviceModel.model,
       chargePointSerialNumber: instance.chargePointId,
+      // The board's current firmware-version parameter (see maintenance.ts), if the model
+      // defines one — a real charger reports the firmware it's actually running in
+      // BootNotification, not just its model identity. Fixed here from a prior gap where it was
+      // omitted entirely (see AUDIT-integration.md). Snapshotted once at connection time; a
+      // firmware upgrade that completes on an already-open connection doesn't currently
+      // resend BootNotification with the bumped version (no reconnect/reboot is forced today) —
+      // a real charger would typically reboot after a firmware upgrade, which is when it would
+      // resend this; left as a known follow-up.
+      firmwareVersion,
     },
     connectors: orderModelConnectors(instance.deviceModel.connectors).map((connector) => ({
       connectorId: connector.connectorId,
@@ -93,13 +102,15 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
     // read that persisted state) never show a remote-started session at all. See
     // AUDIT-integration.md for why this lives here (the DI boundary) rather than in `src/lib/ocpp`.
     onRemoteTransactionStarted: async (connectorId, info) => {
-      await adoptRemoteSession(instance.id, connectorId, info);
+      // remote-commands.ts already runs its own periodic MeterValues sender for a CSMS-initiated
+      // transaction — don't also start connector-sessions.ts's, or the CSMS gets double MeterValues.
+      await adoptRemoteSession(instance.id, connectorId, { ...info, skipMeterValuesLoop: true });
     },
     onRemoteTransactionStopped: async (connectorId, info) => {
       await stopChargingSession(instance.id, connectorId, {
         stopCause: info.reason === "Remote" ? "Remote Stop" : info.reason,
         skipCsmsNotify: true,
-        energyWhOverride: info.meterStopWh,
+        energyWhOverride: info.energyWh,
       });
     },
   });
@@ -159,8 +170,14 @@ function createEntry(instance: InstanceWithConnectors): RuntimeEntry {
   return entry;
 }
 
-function getOrCreateEntry(instance: InstanceWithConnectors): RuntimeEntry {
-  return registry.get(instance.id) ?? createEntry(instance);
+async function getOrCreateEntry(instance: InstanceWithConnectors): Promise<RuntimeEntry> {
+  const existing = registry.get(instance.id);
+  if (existing) return existing;
+
+  const firmwareParameter = await prisma.deviceInstanceParameter.findFirst({
+    where: { deviceInstanceId: instance.id, key: "firmwareVersion" },
+  });
+  return createEntry(instance, firmwareParameter?.value ?? undefined);
 }
 
 /**
@@ -174,7 +191,7 @@ export async function startDeviceInstance(instanceId: string): Promise<DeviceIns
     where: { id: instanceId },
     include: { deviceModel: { include: { connectors: true } } },
   });
-  const entry = getOrCreateEntry(instance);
+  const entry = await getOrCreateEntry(instance);
   entry.manuallyStopped = false;
 
   const connecting = await prisma.deviceInstance.update({
@@ -254,7 +271,7 @@ export async function callOcpp(
     where: { id: instanceId },
     include: { deviceModel: { include: { connectors: true } } },
   });
-  return getOrCreateEntry(instance).client.call(action, payload);
+  return (await getOrCreateEntry(instance)).client.call(action, payload);
 }
 
 /**
@@ -271,7 +288,7 @@ export async function getOrCreateChargePointSession(instanceId: string): Promise
     where: { id: instanceId },
     include: { deviceModel: { include: { connectors: true } } },
   });
-  return getOrCreateEntry(instance).session;
+  return (await getOrCreateEntry(instance)).session;
 }
 
 const globalForReconcile = globalThis as unknown as {

@@ -1,17 +1,39 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { WebSocket } from "ws";
 
 import {
   adoptRemoteSession,
   ConnectorSessionError,
+  getMeterRegisterWh,
   listConnectorStates,
   startChargingSession,
   stopChargingSession,
 } from "../connector-sessions";
 import { orderModelConnectors } from "../connectors";
 import { startChargingTest, stopChargingTest } from "../hardware-test-state";
-import { getInstanceConnectorStatuses } from "../runtime";
+import { disposeDeviceInstance, getInstanceConnectorStatuses, startDeviceInstance } from "../runtime";
+import { MockCsmsServer } from "@/lib/ocpp/__tests__/mock-csms-server";
 import { createTestModelAndInstance, deleteTestDeviceModel, type TestDeviceModel } from "./test-helpers";
 import { prisma } from "@/lib/prisma";
+
+/** Buffers frames so sequential `next()` calls can't drop one that arrives before the listener attaches. */
+function createMessageQueue(serverSocket: WebSocket) {
+  const buffered: unknown[][] = [];
+  const waiters: Array<(msg: unknown[]) => void> = [];
+  serverSocket.on("message", (data) => {
+    const parsed = JSON.parse((data as Buffer).toString()) as unknown[];
+    const waiter = waiters.shift();
+    if (waiter) waiter(parsed);
+    else buffered.push(parsed);
+  });
+  return {
+    next(): Promise<unknown[]> {
+      const queued = buffered.shift();
+      if (queued) return Promise.resolve(queued);
+      return new Promise((resolve) => waiters.push(resolve));
+    },
+  };
+}
 
 describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", () => {
   let deviceModel: TestDeviceModel;
@@ -193,5 +215,107 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
       listConnectorStates(instanceId),
     ]);
     expect(withPreload).toEqual(withoutPreload);
+  });
+});
+
+// A locally-authorized session (master card / local auth list) must still report a real
+// StartTransaction/StopTransaction to the CSMS once connected — a real charger reports every
+// session it starts, not just CSMS-initiated ones. See AUDIT-integration.md's "manual start
+// flow never reaches the CSMS" finding. The existing "promotes Preparing to Charging..." test
+// above (no csmsUrl, never connected) already regression-covers the disconnected case staying
+// purely local (transactionId 1, the local counter) — these cover the connected case.
+describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a connected CSMS (integration)", () => {
+  let deviceModel: TestDeviceModel;
+  let instanceId: string;
+  let server: MockCsmsServer;
+
+  afterEach(async () => {
+    if (instanceId) disposeDeviceInstance(instanceId);
+    if (deviceModel) await deleteTestDeviceModel(deviceModel.id);
+    if (server) await server.close();
+  });
+
+  it("reports a real StartTransaction with meterStart 0 for a connector's first transaction, and adopts the CSMS's transactionId", async () => {
+    server = await MockCsmsServer.start();
+    const created = await createTestModelAndInstance({ csmsUrl: server.url });
+    deviceModel = created.deviceModel;
+    instanceId = created.instance.id;
+
+    await startDeviceInstance(instanceId);
+    const serverSocket = await server.waitForConnection();
+    const queue = createMessageQueue(serverSocket);
+    await queue.next(); // BootNotification, irrelevant here
+
+    await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { activeStartedAt: new Date(Date.now() - 20_000) },
+    });
+
+    const listPromise = listConnectorStates(instanceId);
+    const [, startId, startAction, startPayload] = await queue.next();
+    expect(startAction).toBe("StartTransaction");
+    expect(startPayload).toMatchObject({ connectorId: 1, idTag: "MASTER-TEST", meterStart: 0 });
+    serverSocket.send(JSON.stringify([3, startId, { idTagInfo: { status: "Accepted" }, transactionId: 900 }]));
+
+    const states = await listPromise;
+    const connector1 = states.find((c) => c.connectorId === 1)!;
+    expect(connector1.status).toBe("Charging");
+    expect(connector1.activeSession?.transactionId).toBe(900);
+  });
+
+  it("uses the connector's persisted register (not 0) as meterStart for a second transaction, and reports the correct absolute meterStop on stop", async () => {
+    server = await MockCsmsServer.start();
+    const created = await createTestModelAndInstance({ csmsUrl: server.url });
+    deviceModel = created.deviceModel;
+    instanceId = created.instance.id;
+
+    // Seed a completed prior session on connector 1 worth 5000 Wh — the register a real
+    // second transaction's meterStart should reflect, not 0.
+    await prisma.deviceInstanceSession.create({
+      data: {
+        deviceInstanceId: instanceId,
+        connectorId: 1,
+        connectorLabel: "Plug A",
+        idTag: "PRIOR-CARD",
+        transactionId: 1,
+        startedAt: new Date(Date.now() - 60_000),
+        stoppedAt: new Date(Date.now() - 30_000),
+        energyWh: 5000,
+        cost: 1.5,
+        currency: "USD",
+        stopCause: "Manu. Stop",
+      },
+    });
+    expect(await getMeterRegisterWh(instanceId, 1)).toBe(5000);
+
+    await startDeviceInstance(instanceId);
+    const serverSocket = await server.waitForConnection();
+    const queue = createMessageQueue(serverSocket);
+    await queue.next(); // BootNotification
+
+    await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { activeStartedAt: new Date(Date.now() - 20_000) },
+    });
+
+    const listPromise = listConnectorStates(instanceId);
+    const [, startId, , startPayload] = await queue.next();
+    expect(startPayload).toMatchObject({ connectorId: 1, meterStart: 5000 });
+    serverSocket.send(JSON.stringify([3, startId, { idTagInfo: { status: "Accepted" }, transactionId: 901 }]));
+    await listPromise;
+
+    const stopPromise = stopChargingSession(instanceId, 1, { stopCause: "Manu. Stop" });
+    const [, stopId, stopAction, stopPayload] = await queue.next();
+    expect(stopAction).toBe("StopTransaction");
+    expect(stopPayload).toMatchObject({ transactionId: 901 });
+    // meterStop must be the *absolute* register (baseline 5000 + this transaction's own small
+    // delta), never just the delta alone — CitrineOS computes totalKwh = meterStop - meterStart,
+    // so a bare delta here would make it come out negative.
+    expect((stopPayload as Record<string, unknown>).meterStop as number).toBeGreaterThanOrEqual(5000);
+    serverSocket.send(JSON.stringify([3, stopId, {}]));
+
+    await stopPromise;
   });
 });

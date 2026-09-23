@@ -187,13 +187,15 @@ export interface RemoteCommandHandlersDeps {
   /**
    * Called once a remote-tracked transaction has actually stopped (via `RemoteStopTransaction`
    * or a `Reset`) and its `StopTransaction` has already been sent to the CSMS — the counterpart
-   * to {@link onRemoteTransactionStarted}. `meterStopWh` is this module's own simulated final
-   * energy register, passed through so the mirrored persisted session records the same energy
-   * figure that was actually reported to the CSMS rather than an independently-simulated one.
+   * to {@link onRemoteTransactionStarted}. `energyWh` is this transaction's own energy delta
+   * (this module's simulated meterStop minus this same transaction's own meterStart) — NOT the
+   * connector's absolute cumulative register — so a caller mirroring this into a per-transaction
+   * record (e.g. a Cost-screen row) gets the same per-session figure a real StopTransaction's
+   * `(meterStop - meterStart)` represents, rather than the whole register value.
    */
   onRemoteTransactionStopped?: (
     connectorId: number,
-    info: { transactionId: number; reason: string; meterStopWh: number },
+    info: { transactionId: number; reason: string; energyWh: number },
   ) => void | Promise<void>;
 }
 
