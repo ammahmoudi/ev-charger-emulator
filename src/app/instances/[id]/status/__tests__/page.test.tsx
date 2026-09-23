@@ -91,6 +91,14 @@ describe("StatusDiagnosticsPage — per-plug unlock buttons", () => {
     expect(screen.getByRole("button", { name: "Plug B unlock" })).toBeInTheDocument();
   });
 
+  it("orders the buttons details(A), unlock(A), unlock(B), details(B), matching the real device's row", async () => {
+    render(<StatusDiagnosticsPage />);
+    await screen.findByRole("link", { name: "Plug A details" });
+
+    const buttons = screen.getAllByText(/^Plug [AB] (details|unlock)$/);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Plug A details", "Plug A unlock", "Plug B unlock", "Plug B details"]);
+  });
+
   it("only enables unlock for a currently-locked connector", async () => {
     render(<StatusDiagnosticsPage />);
 

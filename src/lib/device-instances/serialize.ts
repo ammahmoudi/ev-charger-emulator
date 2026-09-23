@@ -38,7 +38,9 @@ export async function serializeDeviceInstance(instanceId: string) {
   });
   if (!instance) return null;
 
-  const valueByParameterId = new Map(instance.parameters.map((p) => [p.deviceModelParameterId, p.value]));
+  const valueByParameterId = new Map(
+    instance.parameters.map((p) => [p.deviceModelParameterId, { value: p.value, updatedAt: p.updatedAt }]),
+  );
 
   return {
     id: instance.id,
@@ -71,7 +73,14 @@ export async function serializeDeviceInstance(instanceId: string) {
       maxValue: p.maxValue,
       description: p.description,
       sortOrder: p.sortOrder,
-      value: valueByParameterId.get(p.id) ?? null,
+      value: valueByParameterId.get(p.id)?.value ?? null,
+      // When this instance's value for this parameter was last set — the real device's Setting >
+      // Device tab shows a "Date" next to Firmware and a "Plug A/B Date" next to each plug's
+      // firmware (see docs/device-reference/PEVC3107E/screenshots/05-settings-device.png), which
+      // this instance has no dedicated field for; reusing the parameter row's own updatedAt is a
+      // reasonable proxy (it *is* "when this firmware value was installed/set" for the
+      // firmwareVersion/plugAFirmwareVersion/plugBFirmwareVersion keys specifically).
+      updatedAt: valueByParameterId.get(p.id)?.updatedAt ?? null,
     })),
   };
 }

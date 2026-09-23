@@ -62,3 +62,37 @@ export function connectorDisplayLabel(connector: ConnectorView): string {
 export function orderConnectorsByEvse<T extends { evseIndex: number; connectorIndex: number }>(connectors: T[]): T[] {
   return [...connectors].sort((a, b) => a.evseIndex - b.evseIndex || a.connectorIndex - b.connectorIndex);
 }
+
+export interface ConnectorButtonDescriptor<T> {
+  connector: T;
+  kind: "details" | "unlock";
+}
+
+/**
+ * Lays out a connector's "details"/"unlock" button pair in the real device's outside-in order —
+ * e.g. for two connectors: details(A), unlock(A), unlock(B), details(B) — instead of the more
+ * obvious per-connector grouping (details(A), unlock(A), details(B), unlock(B)). See
+ * docs/device-reference/PEVC3107E/screenshots/02-status-diagnostics.png's button row. Mirrors
+ * from both ends inward, which degrades reasonably for a connector count other than 2 (the only
+ * count this device model actually has).
+ */
+export function buildOutsideInButtons<T>(connectors: T[]): ConnectorButtonDescriptor<T>[] {
+  const buttons: ConnectorButtonDescriptor<T>[] = [];
+  let lo = 0;
+  let hi = connectors.length - 1;
+  while (lo <= hi) {
+    if (lo === hi) {
+      buttons.push({ connector: connectors[lo], kind: "details" }, { connector: connectors[lo], kind: "unlock" });
+    } else {
+      buttons.push(
+        { connector: connectors[lo], kind: "details" },
+        { connector: connectors[lo], kind: "unlock" },
+        { connector: connectors[hi], kind: "unlock" },
+        { connector: connectors[hi], kind: "details" },
+      );
+    }
+    lo += 1;
+    hi -= 1;
+  }
+  return buttons;
+}
