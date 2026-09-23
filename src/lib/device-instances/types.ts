@@ -47,6 +47,8 @@ export interface DeviceInstanceParameterView {
   description: string | null;
   sortOrder: number;
   value: string | null;
+  /** When this instance's value for this parameter was last set (ISO string), or `null` if it's still at the model's default and was never explicitly written. */
+  updatedAt: string | null;
 }
 
 export interface DeviceInstanceDetail {

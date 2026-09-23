@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DiagnosticField } from "@/components/device-instances/DiagnosticField";
+import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { connectorDisplayLabel, type ConnectorView, type ContactStatus, type InterfaceBoardView } from "@/lib/device-instances/diagnostics-types";
 import { useDeviceInstanceConnectors } from "@/lib/device-instances/useDeviceInstanceConnectors";
 
@@ -12,7 +14,7 @@ import { useDeviceInstanceConnectors } from "@/lib/device-instances/useDeviceIns
 export default function ContactorStatusPage() {
   const params = useParams<{ id: string }>();
   const instanceId = params.id;
-  const { connectors, notFound } = useDeviceInstanceConnectors(instanceId);
+  const { header, connectors, notFound } = useDeviceInstanceConnectors(instanceId);
 
   const [boards, setBoards] = useState<Record<string, InterfaceBoardView>>({});
 
@@ -56,7 +58,7 @@ export default function ContactorStatusPage() {
     );
   }
 
-  if (!connectors) {
+  if (!header || !connectors) {
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
         <p className="text-sm text-zinc-500">Loading…</p>
@@ -65,33 +67,42 @@ export default function ContactorStatusPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
-      <div className="flex flex-col gap-1">
-        <Link href={`/instances/${instanceId}/status`} className="text-xs text-zinc-500 hover:underline">
-          ← Status / diagnostics
-        </Link>
-        <h1 className="text-xl font-semibold text-black dark:text-zinc-50">Contactor status</h1>
-        <p className="text-sm text-zinc-500">KM1/KM2 relay state per plug. Click a value to toggle it.</p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
+      <Link href={`/instances/${instanceId}/status`} className="text-xs text-zinc-500 hover:underline">
+        ← Status / diagnostics
+      </Link>
 
-      <div className="flex flex-col gap-4">
-        {connectors.map((connector: ConnectorView) => {
-          const board = boards[connector.id];
-          return (
-            <div key={connector.id} className="rounded-lg border border-zinc-200 px-4 dark:border-zinc-800">
-              <h2 className="pt-3 text-sm font-semibold text-zinc-700 dark:text-zinc-300">{connectorDisplayLabel(connector)}</h2>
-              {board ? (
-                <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                  <DiagnosticField label="KM1 status" value={board.km1Status} onToggle={() => toggle(connector.id, "km1Status", board.km1Status)} />
-                  <DiagnosticField label="KM2 status" value={board.km2Status} onToggle={() => toggle(connector.id, "km2Status", board.km2Status)} />
+      {/* No bottom nav here either, matching the real device's own drill-down screens — reached
+          only via the back arrow above. */}
+      <DeviceScreenFrame>
+        <DeviceHeaderBar instanceId={instanceId} title={header.name} />
+
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Contactor status</h1>
+            <p className="text-sm text-zinc-500">KM1/KM2 relay state per plug. Click a value to toggle it.</p>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            {connectors.map((connector: ConnectorView) => {
+              const board = boards[connector.id];
+              return (
+                <div key={connector.id} className="rounded-lg border border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900">
+                  <h2 className="pt-3 text-sm font-semibold text-zinc-700 dark:text-zinc-300">{connectorDisplayLabel(connector)}</h2>
+                  {board ? (
+                    <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                      <DiagnosticField label="KM1 status" value={board.km1Status} onToggle={() => toggle(connector.id, "km1Status", board.km1Status)} />
+                      <DiagnosticField label="KM2 status" value={board.km2Status} onToggle={() => toggle(connector.id, "km2Status", board.km2Status)} />
+                    </div>
+                  ) : (
+                    <p className="py-3 text-sm text-zinc-500">Loading…</p>
+                  )}
                 </div>
-              ) : (
-                <p className="py-3 text-sm text-zinc-500">Loading…</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      </DeviceScreenFrame>
     </div>
   );
 }

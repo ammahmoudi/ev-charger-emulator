@@ -9,6 +9,7 @@ import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFra
 import { DiagnosticField } from "@/components/device-instances/DiagnosticField";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import {
+  buildOutsideInButtons,
   connectorDisplayLabel,
   orderConnectorsByEvse,
   type HealthStatus,
@@ -192,28 +193,34 @@ export default function StatusDiagnosticsPage() {
 
           {connectors.length > 0 ? (
             <div className="flex flex-wrap gap-3">
-              {connectors.map((connector) => {
+              {/* Outside-in order (details, unlock, …, unlock, details) and a uniform blue-pill
+                  style for every button, matching the real device's row exactly — e.g. for two
+                  connectors: "Plug A details, Plug A unlock, Plug B unlock, Plug B details" (see
+                  docs/device-reference/PEVC3107E/screenshots/02-status-diagnostics.png). Degrades
+                  reasonably for any other connector count (mirrors from both ends inward). */}
+              {buildOutsideInButtons(connectors).map(({ connector, kind }) => {
                 const runtime = runtimeByOrder.get(connector.id);
                 const label = connectorDisplayLabel(connector);
-                return (
-                  <div key={connector.id} className="flex gap-2">
-                    <Link
-                      href={`/instances/${instanceId}/status/plugs/${connector.id}`}
-                      className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                    >
+                const pillClassName =
+                  "rounded-full bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-blue-700 dark:hover:bg-blue-600";
+                if (kind === "details") {
+                  return (
+                    <Link key={`${connector.id}-details`} href={`/instances/${instanceId}/status/plugs/${connector.id}`} className={pillClassName}>
                       {label} details
                     </Link>
-                    {runtime ? (
-                      <button
-                        type="button"
-                        disabled={!runtime.locked || pendingUnlock === runtime.connectorId}
-                        onClick={() => handleUnlock(runtime.connectorId)}
-                        className="rounded-md border border-blue-300 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:bg-zinc-900 dark:text-blue-400 dark:hover:bg-blue-950"
-                      >
-                        {label} unlock
-                      </button>
-                    ) : null}
-                  </div>
+                  );
+                }
+                if (!runtime) return null;
+                return (
+                  <button
+                    key={`${connector.id}-unlock`}
+                    type="button"
+                    disabled={!runtime.locked || pendingUnlock === runtime.connectorId}
+                    onClick={() => handleUnlock(runtime.connectorId)}
+                    className={pillClassName}
+                  >
+                    {label} unlock
+                  </button>
                 );
               })}
             </div>

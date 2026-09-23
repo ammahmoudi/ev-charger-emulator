@@ -42,19 +42,25 @@ function formatElapsed(startedAt: string, now: Date): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-/** Generic connector glyph — deliberately not connector-type-specific, matching all `ConnectorType` values. */
+/**
+ * Generic connector glyph — deliberately not connector-type-specific, matching all
+ * `ConnectorType` values. Loosely mirrors the real device's CCS2 socket icon (a ring of pins
+ * above two DC-pin tabs — see docs/device-reference/PEVC3107E/screenshots/01-home-dual-plug.png):
+ * a tight cluster of pins, no other decoration. An earlier version added a curved "smile" line
+ * beneath the pin cluster that isn't part of the real icon and made this read as a cartoon face
+ * rather than a connector — removed here.
+ */
 function ConnectorGlyph({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth={2} className={className}>
-      <circle cx="32" cy="26" r="18" />
-      <circle cx="24" cy="20" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="32" cy="24" r="15" />
       <circle cx="32" cy="16" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="40" cy="20" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="22" cy="30" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="42" cy="30" r="2.5" fill="currentColor" stroke="none" />
-      <path d="M20 32q12 10 24 0" strokeLinecap="round" />
-      <rect x="22" y="46" width="8" height="10" rx="2" />
-      <rect x="34" y="46" width="8" height="10" rx="2" />
+      <circle cx="39" cy="20" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="36" cy="28" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="28" cy="28" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="25" cy="20" r="2.5" fill="currentColor" stroke="none" />
+      <rect x="23" y="42" width="7" height="11" rx="2" />
+      <rect x="34" y="42" width="7" height="11" rx="2" />
     </svg>
   );
 }

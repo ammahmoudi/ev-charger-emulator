@@ -12,7 +12,7 @@ import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHe
 import { compactControlClassName, SettingsFieldRow } from "@/components/device-instances/settings/SettingsFieldRow";
 import { SettingsPager } from "@/components/device-instances/settings/SettingsPager";
 import { SettingsTabs } from "@/components/device-instances/settings/SettingsTabs";
-import { paginateBySortOrder, splitIntoColumns } from "@/lib/device-instances/settings-pages";
+import { formatFirmwareDate, paginateBySortOrder, splitIntoColumns } from "@/lib/device-instances/settings-pages";
 import { PARAMETER_CATEGORY_ORDER, type DeviceInstanceDetail, type DeviceInstanceParameterView } from "@/lib/device-instances/types";
 
 /**
@@ -217,8 +217,11 @@ function DeviceTabContent({
     { label: "Firmware", value: byKey.get("firmwareVersion")?.value ?? "—" },
     { label: "UI", value: byKey.get("uiVersion")?.value ?? "—" },
     { label: "CRC", value: byKey.get("crc")?.value ?? "—" },
+    { label: "Date", value: formatFirmwareDate(byKey.get("firmwareVersion")) },
     { label: "Plug A Firmware", value: byKey.get("plugAFirmwareVersion")?.value ?? "—" },
+    { label: "Plug A Date", value: formatFirmwareDate(byKey.get("plugAFirmwareVersion")) },
     { label: "Plug B Firmware", value: byKey.get("plugBFirmwareVersion")?.value ?? "—" },
+    { label: "Plug B Date", value: formatFirmwareDate(byKey.get("plugBFirmwareVersion")) },
   ];
   const [left, right] = splitIntoColumns(readOnlyRows);
 
