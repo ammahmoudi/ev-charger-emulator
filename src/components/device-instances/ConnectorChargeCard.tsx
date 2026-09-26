@@ -146,7 +146,7 @@ export function ConnectorChargeCard({
         </p>
       ) : (
         <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
-          {evConnected ? "EV connected — click Charging to start." : "Please connect the EV or click charging button."}
+          {evConnected ? "EV connected — click Charging to start." : "Please connect the EV or use the Plug in EV control below."}
         </p>
       )}
 
