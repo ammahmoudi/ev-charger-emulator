@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { CarSimulatorPanel } from "@/components/device-instances/CarSimulatorPanel";
 import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
@@ -42,6 +43,7 @@ export default function InstanceHomePage() {
   const [now, setNow] = useState(() => new Date());
   const [connectionPending, setConnectionPending] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
+  const [evPendingConnectorId, setEvPendingConnectorId] = useState<number | null>(null);
   const [connectorErrors, setConnectorErrors] = useState<Record<number, string>>({});
   const [summary, setSummary] = useState<PostChargeSummary | null>(null);
   const [rfidPrompt, setRfidPrompt] = useState<RfidPromptState | null>(null);
@@ -143,6 +145,26 @@ export default function InstanceHomePage() {
     }
   }
 
+  async function handleToggleEv(connectorId: number, connected: boolean) {
+    setEvPendingConnectorId(connectorId);
+    setConnectorErrors((prev) => ({ ...prev, [connectorId]: "" }));
+    try {
+      const res = await fetch(`/api/device-instances/${instanceId}/connectors/${connectorId}/ev`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connected }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setConnectorErrors((prev) => ({ ...prev, [connectorId]: data.error ?? "Failed to update the EV connection" }));
+        return;
+      }
+      await loadConnectors();
+    } finally {
+      setEvPendingConnectorId(null);
+    }
+  }
+
   async function handleClearFault(connectorId: number) {
     setPendingConnectorId(connectorId);
     try {
@@ -216,10 +238,14 @@ export default function InstanceHomePage() {
                   runtime={connectorByIdConnectorId.get(connector.connectorId) ?? null}
                   now={now}
                   pending={pendingConnectorId === connector.connectorId}
+                  evPending={evPendingConnectorId === connector.connectorId}
                   error={connectorErrors[connector.connectorId] || null}
                   onStartCharging={() => openRfidPrompt(connector.connectorId, connector.label, connector.maxPowerKw)}
                   onStopCharging={() => handleStopCharging(connector.connectorId)}
                   onClearFault={() => handleClearFault(connector.connectorId)}
+                  onToggleEv={() =>
+                    handleToggleEv(connector.connectorId, !(connectorByIdConnectorId.get(connector.connectorId)?.evConnected ?? false))
+                  }
                 />
               ))}
             </div>
@@ -232,6 +258,20 @@ export default function InstanceHomePage() {
 
         <DeviceBottomNav instanceId={instanceId} />
       </DeviceScreenFrame>
+
+      <CarSimulatorPanel
+        connectors={instance.connectors.map((connector) => {
+          const runtime = connectorByIdConnectorId.get(connector.connectorId);
+          return {
+            connectorId: connector.connectorId,
+            label: connector.label,
+            evConnected: runtime?.evConnected ?? false,
+            isCharging: runtime?.status === "Charging" && runtime.activeSession !== null,
+          };
+        })}
+        pendingConnectorId={evPendingConnectorId}
+        onToggle={handleToggleEv}
+      />
 
       {summary ? <PostChargeSummaryModal summary={summary} onClose={() => setSummary(null)} /> : null}
 

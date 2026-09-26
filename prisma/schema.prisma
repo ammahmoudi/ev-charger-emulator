@@ -450,6 +450,14 @@ model DeviceInstanceConnectorState {
   /// Manual per-connector lock, toggled from the Lock screen; mirrors `UnlockConnector` but
   /// locally triggerable (issue #14), independent of the CSMS-initiated path from issue #10.
   locked Boolean @default(false)
+  /// Whether a simulated EV is currently plugged into this connector — an explicit model of the
+  /// real device's cable/proximity-pilot presence signal, which this emulator previously had no
+  /// equivalent for (`startChargingSession` could begin a session with no EV ever represented as
+  /// present, despite the Home screen's own idle prompt claiming one was required). Toggled by the
+  /// Home screen's EV connect/disconnect control, independent of authorization — see
+  /// `connector-sessions.ts`'s `connectEv`/`disconnectEv`. Unplugging mid-session force-stops it
+  /// with `stopCause: "EV Disconnected"`, a value `stop-causes.ts` already reserved for this.
+  evConnected Boolean @default(false)
 
   activeIdTag         String?
   activeTransactionId Int?

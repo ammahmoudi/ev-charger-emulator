@@ -147,6 +147,7 @@ export interface ConnectorRuntimeView {
   label: string | null;
   status: string;
   locked: boolean;
+  evConnected: boolean;
   activeSession: {
     idTag: string;
     transactionId: number | null;

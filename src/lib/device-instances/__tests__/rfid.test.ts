@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 
-import { listConnectorStates } from "../connector-sessions";
+import { connectEv, listConnectorStates } from "../connector-sessions";
 import { upsertLocalAuthEntry } from "../local-auth";
 import { presentRfidCard, RfidError } from "../rfid";
 import { disposeDeviceInstance, startDeviceInstance } from "../runtime";
@@ -40,6 +40,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
     const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1" });
     deviceModel = created.deviceModel;
     instanceId = created.instance.id;
+    await connectEv(instanceId, 1);
 
     const view = await presentRfidCard(instanceId, 1, "MASTER-1", 20);
     expect(view.status).toBe("Preparing");
@@ -49,6 +50,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
     const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1" });
     deviceModel = created.deviceModel;
     instanceId = created.instance.id;
+    await connectEv(instanceId, 1);
     await upsertLocalAuthEntry(instanceId, "LOCAL-CARD", "ACCEPTED");
 
     const view = await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20);

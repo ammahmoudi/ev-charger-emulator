@@ -67,7 +67,13 @@ interface InternalState {
 
 export class HardwareTestStateError extends Error {}
 
-/** Session statuses `connector-sessions.ts` considers "active" — a hardware output test must not start on top of one of these. */
+/**
+ * Session statuses `connector-sessions.ts` considers "active" — a hardware output test must not
+ * start on top of one of these. `Preparing` is ambiguous on its own since `connectEv` promotes an
+ * idle connector there the moment an EV connects, with no session yet — `fetchActiveConnectorSession`
+ * below only treats `Preparing` as active when it also has a real `activeSession` (a card's been
+ * presented and it's authorizing/charging), not just a parked, unauthorized EV.
+ */
 const ACTIVE_SESSION_STATUSES = new Set(["Preparing", "Charging", "Finishing"]);
 
 export interface HardwareTestStateDeps {
@@ -98,6 +104,10 @@ export interface HardwareTestStateDeps {
 async function fetchActiveConnectorSession(instanceId: string, connectorId: number): Promise<{ status: string } | null> {
   const state = (await listConnectorStates(instanceId)).find((c) => c.connectorId === connectorId);
   if (!state || !ACTIVE_SESSION_STATUSES.has(state.status)) return null;
+  // A connector idling in Preparing because an EV is plugged in but no card's been presented yet
+  // has no real session running — only block once one actually exists (Charging always does;
+  // Finishing always did, its session fields are cleared but it's still mid-settle).
+  if (state.status === "Preparing" && state.activeSession === null) return null;
   return { status: state.status };
 }
 
