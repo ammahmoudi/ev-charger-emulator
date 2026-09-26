@@ -15,6 +15,7 @@ export interface ChargeCardConnector {
 export interface ChargeCardRuntime {
   status: string;
   locked: boolean;
+  evConnected: boolean;
   activeSession: {
     idTag: string;
     startedAt: string;
@@ -76,22 +77,28 @@ export function ConnectorChargeCard({
   runtime,
   now,
   pending,
+  evPending,
   error,
   onStartCharging,
   onStopCharging,
   onClearFault,
+  onToggleEv,
 }: {
   connector: ChargeCardConnector;
   runtime: ChargeCardRuntime | null;
   now: Date;
   pending: boolean;
+  /** Separate pending flag for the EV plug/unplug control below, so toggling it doesn't read as the Charging/Stop button being busy (and vice versa). */
+  evPending: boolean;
   error: string | null;
   onStartCharging: () => void;
   onStopCharging: () => void;
   onClearFault: () => void;
+  onToggleEv: () => void;
 }) {
   const status = runtime?.status ?? "Available";
   const session = runtime?.activeSession ?? null;
+  const evConnected = runtime?.evConnected ?? false;
   const isPreparing = status === "Preparing" && session !== null;
   const isCharging = status === "Charging" && session !== null;
   const isFaulted = status === "Faulted";
@@ -113,7 +120,9 @@ export function ConnectorChargeCard({
               ? "text-amber-500 animate-pulse"
               : isFaulted
                 ? "text-red-400"
-                : "text-zinc-300 dark:text-zinc-700"
+                : evConnected
+                  ? "text-sky-400"
+                  : "text-zinc-300 dark:text-zinc-700"
         }`}
       />
 
@@ -137,7 +146,7 @@ export function ConnectorChargeCard({
         </p>
       ) : (
         <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
-          Please connect the EV or click charging button.
+          {evConnected ? "EV connected — click Charging to start." : "Please connect the EV or click charging button."}
         </p>
       )}
 
@@ -173,13 +182,33 @@ export function ConnectorChargeCard({
       ) : (
         <button
           type="button"
-          disabled={pending || status !== "Available"}
+          disabled={pending || status !== "Available" || !evConnected}
           onClick={onStartCharging}
           className="w-full rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
         >
           Charging
         </button>
       )}
+
+      {/*
+       * EV plug/unplug — the physical cable/car, independent of the Charging/Stop button above
+       * (which represents authorization). Always shown, regardless of session state: unplugging
+       * while Preparing or Charging force-stops the session (stopCause "EV Disconnected"),
+       * mirroring a real cable pull, so this control stays the one place that always reflects
+       * (and controls) whether a car is actually there.
+       */}
+      <button
+        type="button"
+        disabled={evPending}
+        onClick={onToggleEv}
+        className={`w-full rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+          evConnected
+            ? "border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            : "border-sky-300 text-sky-700 hover:bg-sky-50 dark:border-sky-900 dark:text-sky-400 dark:hover:bg-sky-950"
+        }`}
+      >
+        {evConnected ? (isCharging || isPreparing ? "Unplug EV (stops session)" : "Unplug EV") : "Plug in EV"}
+      </button>
     </div>
   );
 }

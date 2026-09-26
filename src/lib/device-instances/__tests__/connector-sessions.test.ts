@@ -3,7 +3,9 @@ import type { WebSocket } from "ws";
 
 import {
   adoptRemoteSession,
+  connectEv,
   ConnectorSessionError,
+  disconnectEv,
   getMeterRegisterWh,
   listConnectorStates,
   startChargingSession,
@@ -51,6 +53,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("starts a local session in Preparing and mirrors it onto the OCPP session", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     const view = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
     expect(view.status).toBe("Preparing");
     expect(view.locked).toBe(true);
@@ -66,6 +69,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("promotes Preparing to Charging once the preparing duration has elapsed, and mirrors it onto the OCPP session", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
 
     // Backdate instead of waiting out PREPARING_DURATION_MS for real.
@@ -85,6 +89,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("stopping a Charging session enters Finishing, then settles to Available once its hold elapses", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
@@ -111,6 +116,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("stopping during Preparing (no transaction minted yet) skips Finishing and goes straight to Available", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
 
     const result = await stopChargingSession(instanceId, 1, { stopCause: "EV Disconnected" });
@@ -123,6 +129,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("a fault stop cause goes straight to Faulted, skipping Finishing", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
@@ -175,6 +182,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
   // session) is covered in hardware-test-state.test.ts.
   it("startChargingSession refuses to start on a connector running a hardware output test", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingTest(instanceId, 1);
 
     await expect(startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 })).rejects.toThrow(
@@ -202,6 +210,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
   // same result as the default (self-fetching) path.
   it("listConnectorStates with a preloaded connector list matches the default self-fetching path", async () => {
     await setup();
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
 
     const instance = await prisma.deviceInstance.findUniqueOrThrow({
@@ -215,6 +224,103 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
       listConnectorStates(instanceId),
     ]);
     expect(withPreload).toEqual(withoutPreload);
+  });
+
+  it("startChargingSession refuses to start when no EV is connected", async () => {
+    await setup();
+    await expect(startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 })).rejects.toThrow(
+      /no EV connected/,
+    );
+  });
+});
+
+// The EV plug/unplug control (issue: car/device simulator) — connectEv/disconnectEv model the
+// physical cable/car presence `startChargingSession` now requires, independent of authorization.
+describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)", () => {
+  let deviceModel: TestDeviceModel;
+  let instanceId: string;
+
+  afterEach(async () => {
+    if (deviceModel) await deleteTestDeviceModel(deviceModel.id);
+  });
+
+  async function setup() {
+    const created = await createTestModelAndInstance();
+    deviceModel = created.deviceModel;
+    instanceId = created.instance.id;
+  }
+
+  it("connectEv marks the EV connected without changing status, and unlocks startChargingSession", async () => {
+    await setup();
+    const view = await connectEv(instanceId, 1);
+    expect(view.evConnected).toBe(true);
+    expect(view.status).toBe("Available");
+
+    const started = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    expect(started.status).toBe("Preparing");
+  });
+
+  it("connectEv is idempotent — calling it again while already connected logs nothing further", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await connectEv(instanceId, 1);
+
+    const events = await prisma.deviceInstanceEvent.findMany({ where: { deviceInstanceId: instanceId } });
+    expect(events.filter((e) => e.description.includes("EV connected"))).toHaveLength(1);
+  });
+
+  it("disconnectEv on an idle (Available, no session) connector just clears evConnected", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+
+    const view = await disconnectEv(instanceId, 1);
+    expect(view.evConnected).toBe(false);
+    expect(view.status).toBe("Available");
+  });
+
+  it("disconnectEv is idempotent — calling it again while already disconnected logs nothing further", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await disconnectEv(instanceId, 1);
+    await disconnectEv(instanceId, 1);
+
+    const events = await prisma.deviceInstanceEvent.findMany({ where: { deviceInstanceId: instanceId } });
+    expect(events.filter((e) => e.description.includes("EV disconnected"))).toHaveLength(1);
+  });
+
+  it("disconnectEv during Preparing force-stops the session (stopCause EV Disconnected) and clears evConnected", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+
+    const view = await disconnectEv(instanceId, 1);
+    expect(view.evConnected).toBe(false);
+    expect(view.status).toBe("Available");
+    expect(view.activeSession).toBeNull();
+
+    const sessions = await prisma.deviceInstanceSession.findMany({ where: { deviceInstanceId: instanceId } });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].stopCause).toBe("EV Disconnected");
+    expect(sessions[0].energyWh).toBe(0);
+  });
+
+  it("disconnectEv during Charging force-stops through Finishing (stopCause EV Disconnected) and clears evConnected", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { activeStartedAt: new Date(Date.now() - 20_000) },
+    });
+    await listConnectorStates(instanceId); // resolves the Preparing->Charging promotion
+
+    const view = await disconnectEv(instanceId, 1);
+    expect(view.evConnected).toBe(false);
+    expect(view.status).toBe("Finishing");
+
+    const sessions = await prisma.deviceInstanceSession.findMany({ where: { deviceInstanceId: instanceId } });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].stopCause).toBe("EV Disconnected");
   });
 });
 
@@ -246,6 +352,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a co
     const queue = createMessageQueue(serverSocket);
     await queue.next(); // BootNotification, irrelevant here
 
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
@@ -294,6 +401,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a co
     const queue = createMessageQueue(serverSocket);
     await queue.next(); // BootNotification
 
+    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },

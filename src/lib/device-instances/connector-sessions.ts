@@ -66,6 +66,7 @@ export interface ConnectorRuntimeView {
   label: string | null;
   status: string;
   locked: boolean;
+  evConnected: boolean;
   activeSession: {
     idTag: string;
     transactionId: number | null;
@@ -471,6 +472,7 @@ export async function listConnectorStates(
       label: connector.displayLabel,
       status: state?.status ?? "Available",
       locked: state?.locked ?? false,
+      evConnected: state?.evConnected ?? false,
       activeSession,
     };
   });
@@ -527,6 +529,61 @@ export async function clearConnectorFault(deviceInstanceId: string, connectorId:
 }
 
 /**
+ * Marks an EV as plugged into a connector (the Home screen's EV connect/disconnect control) —
+ * a prerequisite `startChargingSession` now enforces, matching the idle prompt's own long-standing
+ * ("Please connect the EV or click charging button") but previously unenforced claim. Idempotent:
+ * a no-op (no duplicate event logged) if the EV is already connected. Doesn't touch `status` on its
+ * own — plugging in doesn't authorize or start anything, it only makes `startChargingSession`
+ * possible.
+ */
+export async function connectEv(deviceInstanceId: string, connectorId: number): Promise<ConnectorRuntimeView> {
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
+  const state = await getOrCreateState(deviceInstanceId, connectorId);
+
+  if (!state.evConnected) {
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
+      data: { evConnected: true },
+    });
+    const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
+    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV connected`);
+  }
+
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
+  return view;
+}
+
+/**
+ * Marks an EV as unplugged from a connector. Mirrors a real cable pull: if a session is in
+ * progress (`Preparing` or `Charging`), force-stops it first with `stopCause: "EV Disconnected"`
+ * (a value `stop-causes.ts` already reserved for exactly this) via the same `stopChargingSession`
+ * path a manual Stop uses — a `Preparing` session cancels with zero energy/cost, a `Charging` one
+ * goes through the usual `Finishing` hold. Idempotent, like `connectEv`.
+ */
+export async function disconnectEv(deviceInstanceId: string, connectorId: number): Promise<ConnectorRuntimeView> {
+  const connectors = await loadOrderedConnectors(deviceInstanceId);
+  const now = new Date();
+  let state = await getOrCreateState(deviceInstanceId, connectorId);
+  state = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
+
+  if (state.activeStartedAt) {
+    await stopChargingSession(deviceInstanceId, connectorId, { stopCause: "EV Disconnected" });
+  }
+
+  if (state.evConnected) {
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
+      data: { evConnected: false },
+    });
+    const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
+    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV disconnected`, now);
+  }
+
+  const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
+  return view;
+}
+
+/**
  * Starts a locally-simulated charging session on a connector. This module persists
  * connector/session state directly, so the Cost/Event/Lock screens have real data to show
  * without requiring a live CSMS.
@@ -555,6 +612,9 @@ export async function startChargingSession(
   }
   if (state.status !== "Available") {
     throw new ConnectorSessionError(`Connector ${connectorId} is not Available (status: ${state.status})`);
+  }
+  if (!state.evConnected) {
+    throw new ConnectorSessionError(`Connector ${connectorId} has no EV connected — plug in the EV before starting a session`);
   }
 
   const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
