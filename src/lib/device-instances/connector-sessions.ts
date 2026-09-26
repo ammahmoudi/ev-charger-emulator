@@ -381,8 +381,10 @@ async function resolvePreparingPromotion(
 
 /**
  * If `state` has been sitting in `Finishing` for at least `FINISHING_DURATION_MS`, promotes it
- * to its final status (`finishingNextStatus`, typically `Available`). Mirrors
- * `resolvePreparingPromotion`'s conditional-update race guard.
+ * to its final status (`finishingNextStatus` — `Available` if the EV was unplugged along with the
+ * stop, `Preparing` if it's still connected, matching real `StatusNotification` semantics; see
+ * `stopChargingSession`'s `idleStatus`). Mirrors `resolvePreparingPromotion`'s conditional-update
+ * race guard.
  */
 async function resolveFinishingPromotion(
   deviceInstanceId: string,
@@ -529,24 +531,30 @@ export async function clearConnectorFault(deviceInstanceId: string, connectorId:
 }
 
 /**
- * Marks an EV as plugged into a connector (the Home screen's EV connect/disconnect control) —
- * a prerequisite `startChargingSession` now enforces, matching the idle prompt's own long-standing
- * ("Please connect the EV or click charging button") but previously unenforced claim. Idempotent:
- * a no-op (no duplicate event logged) if the EV is already connected. Doesn't touch `status` on its
- * own — plugging in doesn't authorize or start anything, it only makes `startChargingSession`
- * possible.
+ * Marks an EV as plugged into a connector (the Home screen's EV connect/disconnect control). A
+ * cable/EV connecting is itself a real OCPP status transition — real `StatusNotification` traffic
+ * goes `Available` -> `Preparing` the moment a cable is connected, *before* any card is presented
+ * (see `resolvePreparingPromotion`'s own doc comment on the real OC10 capture's timing) — so this
+ * promotes an idle connector to `Preparing` immediately, with no session/idTag yet. A connector
+ * already doing something else (`Faulted`, mid-`Finishing`, or already has a session) is left
+ * alone: a car parking next to a broken or still-settling connector shouldn't yank it back to
+ * `Preparing`, it only unlocks `startChargingSession`. Idempotent: a no-op if already connected.
  */
 export async function connectEv(deviceInstanceId: string, connectorId: number): Promise<ConnectorRuntimeView> {
   const connectors = await loadOrderedConnectors(deviceInstanceId);
   const state = await getOrCreateState(deviceInstanceId, connectorId);
 
   if (!state.evConnected) {
+    const promoteToPreparing = state.status === "Available";
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
-      data: { evConnected: true },
+      data: { evConnected: true, ...(promoteToPreparing ? { status: "Preparing" } : {}) },
     });
     const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
     await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV connected`);
+    if (promoteToPreparing) {
+      await notifySessionStatus(deviceInstanceId, connectorId, "Preparing");
+    }
   }
 
   const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
@@ -554,11 +562,18 @@ export async function connectEv(deviceInstanceId: string, connectorId: number): 
 }
 
 /**
- * Marks an EV as unplugged from a connector. Mirrors a real cable pull: if a session is in
- * progress (`Preparing` or `Charging`), force-stops it first with `stopCause: "EV Disconnected"`
- * (a value `stop-causes.ts` already reserved for exactly this) via the same `stopChargingSession`
- * path a manual Stop uses — a `Preparing` session cancels with zero energy/cost, a `Charging` one
- * goes through the usual `Finishing` hold. Idempotent, like `connectEv`.
+ * Marks an EV as unplugged from a connector. Mirrors a real cable pull:
+ * - A session in progress (authorizing in `Preparing`, or `Charging`) is force-stopped first via
+ *   the same `stopChargingSession` path a manual Stop uses, with `stopCause: "EV Disconnected"`
+ *   (a value `stop-causes.ts` already reserved for exactly this).
+ * - A connector idling in `Preparing` with no session yet (cable connected, no card presented), or
+ *   settling in `Finishing`, is released straight to `Available` — there's nothing to gracefully
+ *   wind down; the car is just gone.
+ * - `evConnected` is cleared *before* the force-stop, not after: `stopChargingSession`'s own
+ *   Finishing-hold decides what status to settle on next from the connector's *current*
+ *   `evConnected` (see `startChargingSession`'s sibling comment) — a disconnect must always land
+ *   back on `Available`, never re-arm `Preparing` for a car that's actively leaving.
+ * Idempotent, like `connectEv`.
  */
 export async function disconnectEv(deviceInstanceId: string, connectorId: number): Promise<ConnectorRuntimeView> {
   const connectors = await loadOrderedConnectors(deviceInstanceId);
@@ -566,18 +581,28 @@ export async function disconnectEv(deviceInstanceId: string, connectorId: number
   let state = await getOrCreateState(deviceInstanceId, connectorId);
   state = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
 
-  if (state.activeStartedAt) {
-    await stopChargingSession(deviceInstanceId, connectorId, { stopCause: "EV Disconnected" });
+  if (!state.evConnected) {
+    const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
+    return view;
   }
 
-  if (state.evConnected) {
+  await prisma.deviceInstanceConnectorState.update({
+    where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
+    data: { evConnected: false },
+  });
+
+  if (state.activeStartedAt) {
+    await stopChargingSession(deviceInstanceId, connectorId, { stopCause: "EV Disconnected" });
+  } else if (state.status !== "Available") {
     await prisma.deviceInstanceConnectorState.update({
       where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
-      data: { evConnected: false },
+      data: { status: "Available", locked: false, finishingSince: null, finishingNextStatus: null },
     });
-    const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
-    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV disconnected`, now);
+    await notifySessionStatus(deviceInstanceId, connectorId, "Available");
   }
+
+  const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
+  await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV disconnected`, now);
 
   const [view] = (await listConnectorStates(deviceInstanceId, connectors)).filter((c) => c.connectorId === connectorId);
   return view;
@@ -610,11 +635,15 @@ export async function startChargingSession(
   if (state.activeStartedAt) {
     throw new ConnectorSessionError(`Connector ${connectorId} already has a session in progress`);
   }
-  if (state.status !== "Available") {
-    throw new ConnectorSessionError(`Connector ${connectorId} is not Available (status: ${state.status})`);
-  }
   if (!state.evConnected) {
     throw new ConnectorSessionError(`Connector ${connectorId} has no EV connected — plug in the EV before starting a session`);
+  }
+  // A connected EV with no session in progress is always `Preparing` — `connectEv` promotes it
+  // there immediately on connect, and every return-to-idle path (disconnectEv, stopChargingSession
+  // below) settles a still-connected connector back on `Preparing`, never `Available`. A status
+  // other than that here means something else has the connector (Faulted, mid-Finishing).
+  if (state.status !== "Preparing") {
+    throw new ConnectorSessionError(`Connector ${connectorId} is not ready to start (status: ${state.status})`);
   }
 
   const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
@@ -826,6 +855,13 @@ export async function stopChargingSession(
     },
   });
 
+  // Where a stop settles once there's no active session left: a connector whose EV is *still*
+  // connected (a plain Stop, not an unplug — see `disconnectEv`, which always clears `evConnected`
+  // before calling this) goes back to `Preparing` — cable's still there, ready for another card —
+  // matching real `StatusNotification` semantics; only a connector with nothing plugged in settles
+  // on `Available`. A fault stop always goes to `Faulted` regardless.
+  const idleStatus = state.evConnected ? "Preparing" : "Available";
+
   await prisma.deviceInstanceConnectorState.update({
     where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } },
     data: goesThroughFinishing
@@ -838,10 +874,10 @@ export async function stopChargingSession(
           activeChargeRateKw: null,
           activeIsRemote: false,
           finishingSince: stoppedAt,
-          finishingNextStatus: "Available",
+          finishingNextStatus: idleStatus,
         }
       : {
-          status: isFault ? "Faulted" : "Available",
+          status: isFault ? "Faulted" : idleStatus,
           locked: false,
           activeIdTag: null,
           activeTransactionId: null,
@@ -873,8 +909,8 @@ export async function stopChargingSession(
     await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Finishing`, stoppedAt);
     await notifySessionStatus(deviceInstanceId, connectorId, "Finishing");
   } else {
-    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Available`, stoppedAt);
-    await notifySessionStatus(deviceInstanceId, connectorId, "Available");
+    await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to ${idleStatus}`, stoppedAt);
+    await notifySessionStatus(deviceInstanceId, connectorId, idleStatus);
   }
 
   return {

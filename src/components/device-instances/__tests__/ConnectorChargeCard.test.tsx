@@ -39,13 +39,13 @@ describe("ConnectorChargeCard", () => {
     expect(screen.getByRole("button", { name: "Plug in EV" })).toBeEnabled();
   });
 
-  it("Available with an EV connected: shows the ready prompt and an enabled Charging button", () => {
+  it("Preparing with an EV connected and no card presented yet: shows the ready prompt and an enabled Charging button", () => {
     const onStartCharging = vi.fn();
     const onToggleEv = vi.fn();
     render(
       <ConnectorChargeCard
         connector={connector}
-        runtime={{ status: "Available", locked: false, evConnected: true, activeSession: null }}
+        runtime={{ status: "Preparing", locked: false, evConnected: true, activeSession: null }}
         now={now}
         pending={false}
         evPending={false}

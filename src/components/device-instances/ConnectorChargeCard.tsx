@@ -182,7 +182,10 @@ export function ConnectorChargeCard({
       ) : (
         <button
           type="button"
-          disabled={pending || status !== "Available" || !evConnected}
+          // A connected EV with no session yet is always "Preparing" (see connector-sessions.ts's
+          // connectEv) — real StatusNotification traffic goes Available -> Preparing the moment a
+          // cable connects, before any card is presented. "Available" itself means no EV at all.
+          disabled={pending || !evConnected || status !== "Preparing" || session !== null}
           onClick={onStartCharging}
           className="w-full rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
         >

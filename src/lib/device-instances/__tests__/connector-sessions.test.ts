@@ -97,6 +97,15 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     });
     await listConnectorStates(instanceId); // resolves the Preparing->Charging promotion
 
+    // This test is about the Finishing timer mechanics settling to Available, which only happens
+    // once the EV is actually gone (see the dedicated "settles back to Preparing" test below for
+    // the still-connected case) — clear it directly rather than going through disconnectEv, which
+    // would stop the session itself before we can assert on stopChargingSession's own return value.
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { evConnected: false },
+    });
+
     const result = await stopChargingSession(instanceId, 1, { stopCause: "Manu. Stop" });
     expect(result.transactionId).toBe(1);
 
@@ -118,6 +127,12 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     await setup();
     await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    // Mirrors what disconnectEv itself does before force-stopping — clear the flag first so the
+    // stop settles on Available, not Preparing (see the dedicated "settles back to Preparing" test).
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { evConnected: false },
+    });
 
     const result = await stopChargingSession(instanceId, 1, { stopCause: "EV Disconnected" });
     expect(result.transactionId).toBeNull();
@@ -250,14 +265,29 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
     instanceId = created.instance.id;
   }
 
-  it("connectEv marks the EV connected without changing status, and unlocks startChargingSession", async () => {
+  it("connectEv promotes an idle connector straight to Preparing (before any card is presented), and unlocks startChargingSession", async () => {
     await setup();
     const view = await connectEv(instanceId, 1);
     expect(view.evConnected).toBe(true);
-    expect(view.status).toBe("Available");
+    expect(view.status).toBe("Preparing");
+    expect(view.activeSession).toBeNull();
 
     const started = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
     expect(started.status).toBe("Preparing");
+    expect(started.activeSession?.idTag).toBe("CARD-1");
+  });
+
+  it("connectEv leaves a Faulted connector alone — it doesn't get yanked back to Preparing", async () => {
+    await setup();
+    await prisma.deviceInstanceConnectorState.upsert({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      update: { status: "Faulted" },
+      create: { deviceInstanceId: instanceId, connectorId: 1, status: "Faulted" },
+    });
+
+    const view = await connectEv(instanceId, 1);
+    expect(view.evConnected).toBe(true);
+    expect(view.status).toBe("Faulted");
   });
 
   it("connectEv is idempotent — calling it again while already connected logs nothing further", async () => {
@@ -269,7 +299,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
     expect(events.filter((e) => e.description.includes("EV connected"))).toHaveLength(1);
   });
 
-  it("disconnectEv on an idle (Available, no session) connector just clears evConnected", async () => {
+  it("disconnectEv on a connector idling in Preparing (no card presented yet) releases it straight to Available", async () => {
     await setup();
     await connectEv(instanceId, 1);
 
@@ -321,6 +351,41 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
     const sessions = await prisma.deviceInstanceSession.findMany({ where: { deviceInstanceId: instanceId } });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].stopCause).toBe("EV Disconnected");
+  });
+
+  // The actual point of this pass: a manual Stop (car never unplugged, just a session ending) must
+  // settle back on Preparing, not Available — the cable's still there, ready for another card,
+  // matching real StatusNotification traffic (Charging -> Finishing -> Preparing when the EV
+  // stays connected, only -> Available once it's actually gone).
+  it("a manual Stop while the EV is still connected settles back to Preparing (not Available) once Finishing elapses", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { activeStartedAt: new Date(Date.now() - 20_000) },
+    });
+    await listConnectorStates(instanceId); // resolves the Preparing->Charging promotion
+
+    await stopChargingSession(instanceId, 1, { stopCause: "Manu. Stop" });
+    let states = await listConnectorStates(instanceId);
+    expect(states.find((c) => c.connectorId === 1)?.status).toBe("Finishing");
+    expect(states.find((c) => c.connectorId === 1)?.evConnected).toBe(true);
+
+    await prisma.deviceInstanceConnectorState.update({
+      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+      data: { finishingSince: new Date(Date.now() - 10_000) },
+    });
+
+    states = await listConnectorStates(instanceId);
+    const connector1 = states.find((c) => c.connectorId === 1)!;
+    expect(connector1.status).toBe("Preparing");
+    expect(connector1.evConnected).toBe(true);
+
+    // And it's immediately ready to start another session — no need to unplug/replug.
+    const restarted = await startChargingSession(instanceId, 1, { idTag: "CARD-2", chargeRateKw: 20 });
+    expect(restarted.status).toBe("Preparing");
+    expect(restarted.activeSession?.idTag).toBe("CARD-2");
   });
 });
 
