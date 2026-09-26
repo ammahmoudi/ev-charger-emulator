@@ -34,7 +34,7 @@ describe("ConnectorChargeCard", () => {
       />,
     );
 
-    expect(screen.getByText("Please connect the EV or click charging button.")).toBeInTheDocument();
+    expect(screen.getByText("Please connect the EV or use the Plug in EV control below.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Charging" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Plug in EV" })).toBeEnabled();
   });
