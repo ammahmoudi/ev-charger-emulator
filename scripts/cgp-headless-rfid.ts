@@ -89,10 +89,11 @@ async function sendStop(reason: "Remote" | "Local" | "EVDisconnected") {
   const closing = tx;
   ended = { reason, at: Date.now() };
   session.setConnectorStatus(connectorId, "Finishing");
-  await rawCall("StopTransaction", { transactionId: closing.transactionId, idTag, meterStop, timestamp: new Date().toISOString(), reason, transactionData: [{ timestamp: new Date().toISOString(), sampledValue: sampledValue(meterStop, "Transaction.End") }] })
+  const timestamp = new Date().toISOString();
+  await rawCall("StopTransaction", { transactionId: closing.transactionId, idTag, meterStop, timestamp, reason, transactionData: [{ timestamp, sampledValue: sampledValue(meterStop, "Transaction.End") }] })
     .then((r) => { log("<-CSMS", "StopTransaction.conf", r); stopConfirmed = true; })
     .catch((e) => { log("<-CSMS", "StopTransaction.error", String(e)); stopFailure = e; });
-  log("->CSMS", "StopTransaction", { transactionId: closing.transactionId, meterStop, reason });
+  log("->CSMS", "StopTransaction", { transactionId: closing.transactionId, meterStop, timestamp, reason });
   session.setConnectorStatus(connectorId, "Available");
 }
 
