@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { DeviceTable } from "@/components/device-instances/DeviceTable";
+import { ScreenPanel, VALUE_FONT } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { Pagination } from "@/components/device-instances/Pagination";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
@@ -64,51 +66,29 @@ export default function EventsPage() {
       <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Event log"} />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Event log</h1>
-
-          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
+        <ScreenPanel>
+          {error ? <p className="px-4 pt-2 text-[20px] text-[#e5302b]">{error}</p> : null}
           {result === null ? (
-            <p className="text-sm text-zinc-500">Loading…</p>
+            <p className="p-6 text-[24px] text-[#888]">Loading…</p>
           ) : (
-            <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-                    <tr>
-                      <th className="px-4 py-2 font-medium">S.N</th>
-                      <th className="px-4 py-2 font-medium">Event occurrence time</th>
-                      <th className="px-4 py-2 font-medium">Event description</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                    {result.items.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} className="px-4 py-6 text-center text-zinc-500">
-                          No events recorded yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      result.items.map((event, idx) => (
-                        <tr key={event.id}>
-                          <td className="px-4 py-2 font-mono text-xs text-zinc-500">
-                            {String((result.page - 1) * PAGE_SIZE + idx + 1).padStart(4, "0")}
-                          </td>
-                          <td className="px-4 py-2 font-mono text-xs text-zinc-600 dark:text-zinc-400">
-                            {formatDateTime(event.occurredAt)}
-                          </td>
-                          <td className="px-4 py-2">{event.description}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+            <>
+              <DeviceTable
+                columns={[
+                  { label: "S.N", width: "110px" },
+                  { label: "Event occurrence time", width: "1fr" },
+                  { label: "Event description", width: "1fr" },
+                ]}
+                minRows={5}
+                rows={result.items.map((event, idx) => [
+                  <span key="n" style={{ fontFamily: VALUE_FONT }}>{String((result.page - 1) * PAGE_SIZE + idx + 1).padStart(4, "0")}</span>,
+                  <span key="t" style={{ fontFamily: VALUE_FONT }}>{formatDateTime(event.occurredAt)}</span>,
+                  <span key="d">{event.description}</span>,
+                ])}
+              />
               <Pagination page={result.page} pageCount={result.pageCount} onPageChange={setPage} />
-            </div>
+            </>
           )}
-        </div>
+        </ScreenPanel>
 
         <DeviceBottomNav instanceId={instanceId} active="Event" />
       </DeviceScreenFrame>

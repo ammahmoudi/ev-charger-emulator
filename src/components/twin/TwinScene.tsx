@@ -11,12 +11,12 @@ import type { TwinPlug } from "./useTwinData";
 
 export type CameraPreset = "overview" | "screen" | "plugA" | "plugB";
 
-export const PARK_X: [number, number] = [-3.3, 3.3];
+export const PARK_X: [number, number] = [-3.1, 3.1];
 const CAR_COLORS = ["#2563eb", "#e2e8f0"];
 
 /** [camera position, look-at target] */
 const PRESETS: Record<CameraPreset, [[number, number, number], [number, number, number]]> = {
-  overview: [[1.2, 2.0, 10.2], [0, 0.95, 0]],
+  overview: [[0.8, 2.1, 11.8], [0, 0.95, 0]],
   screen: [[0, SCREEN_Y, 1.02], [0, SCREEN_Y, 0.3]],
   plugA: [[-4.6, 1.5, 4.4], [-2.0, 0.85, 0.3]],
   plugB: [[4.6, 1.5, 4.4], [2.0, 0.85, 0.3]],

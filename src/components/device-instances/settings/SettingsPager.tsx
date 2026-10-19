@@ -4,33 +4,24 @@ interface SettingsPagerProps {
   onChange: (index: number) => void;
 }
 
-/** Prev/next arrows for a multi-page settings tab, matching the device's `<`/`>` page controls. */
+const arrow =
+  "absolute top-1/2 z-10 flex h-[56px] w-[28px] -translate-y-1/2 items-center justify-center bg-[#eef2f6] text-[44px] leading-none text-[#2f8cf0] disabled:invisible";
+
+/** Prev/next edge arrows for a multi-page settings tab, matching the device's blue `<`/`>` page controls at the panel edges. */
 export function SettingsPager({ pageIndex, pageCount, onChange }: SettingsPagerProps) {
   if (pageCount <= 1) return null;
 
   return (
-    <div className="flex items-center justify-center gap-4 pt-1">
-      <button
-        type="button"
-        disabled={pageIndex === 0}
-        onClick={() => onChange(pageIndex - 1)}
-        aria-label="Previous page"
-        className="flex h-7 w-7 items-center justify-center rounded-full text-blue-600 disabled:text-zinc-300 dark:disabled:text-zinc-700"
-      >
+    <>
+      <button type="button" disabled={pageIndex === 0} onClick={() => onChange(pageIndex - 1)} aria-label="Previous page" className={`${arrow} left-0 rounded-r-[6px]`}>
         ‹
       </button>
-      <span className="text-xs text-zinc-500 dark:text-zinc-400">
-        Page {pageIndex + 1} of {pageCount}
-      </span>
-      <button
-        type="button"
-        disabled={pageIndex === pageCount - 1}
-        onClick={() => onChange(pageIndex + 1)}
-        aria-label="Next page"
-        className="flex h-7 w-7 items-center justify-center rounded-full text-blue-600 disabled:text-zinc-300 dark:disabled:text-zinc-700"
-      >
+      <button type="button" disabled={pageIndex === pageCount - 1} onClick={() => onChange(pageIndex + 1)} aria-label="Next page" className={`${arrow} right-0 rounded-l-[6px]`}>
         ›
       </button>
-    </div>
+      <span className="sr-only">
+        Page {pageIndex + 1} of {pageCount}
+      </span>
+    </>
   );
 }

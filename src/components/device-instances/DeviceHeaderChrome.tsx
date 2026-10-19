@@ -4,6 +4,25 @@ import type { ReactNode } from "react";
 /** Reference blue sampled from docs/device-reference/PEVC3107E/screenshots (#0077ce). */
 export const DEVICE_BLUE = "#0077ce";
 
+/** SN / clock face: the reference renders digits in a tall, tabular LCD-like face. */
+export const LCD_FONT = '"Bahnschrift", "DIN Alternate", "Arial Narrow", "DejaVu Sans Condensed", sans-serif';
+
+/** Passive signal-strength glyph with the red "x" (offline marker) shown on the real device. */
+export function SignalGlyph({ online = false }: { online?: boolean }) {
+  return (
+    <span className="relative flex h-[44px] w-[52px] items-center justify-center text-white">
+      <svg viewBox="0 0 28 24" className="h-[34px] w-[34px]" fill="currentColor">
+        <rect x="2" y="15" width="4" height="7" rx="1" />
+        <rect x="9" y="10" width="4" height="12" rx="1" opacity={online ? 1 : 0.55} />
+        <rect x="16" y="5" width="4" height="17" rx="1" opacity={online ? 1 : 0.35} />
+      </svg>
+      {!online ? (
+        <span className="absolute -bottom-[2px] -right-[2px] flex h-[22px] w-[22px] items-center justify-center rounded-full bg-[#e5302b] text-[16px] font-bold leading-none text-white ring-2 ring-[#0077ce]">×</span>
+      ) : null}
+    </span>
+  );
+}
+
 function HomeGlyph({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="currentColor">
@@ -13,11 +32,14 @@ function HomeGlyph({ className }: { className?: string }) {
 }
 
 /** The little "Hi" logo box at the header's left edge. */
-function HiLogo() {
+function HiLogo({ onClick }: { onClick?: () => void }) {
+  const Tag = onClick ? "button" : "span";
   return (
-    <span className="ml-3 flex h-[44px] w-[44px] flex-none items-center justify-center rounded-[6px] border-2 border-white/90 text-[26px] font-semibold leading-none text-white">
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick, title: "Menu", "aria-label": "Menu" } : {})}
+      className="ml-3 flex h-[44px] w-[44px] flex-none items-center justify-center rounded-[6px] border-2 border-white/90 text-[26px] font-semibold leading-none text-white">
       Hi
-    </span>
+    </Tag>
   );
 }
 
@@ -28,12 +50,15 @@ function HiLogo() {
  */
 export function DeviceHeaderChrome({
   instanceId,
+  onLogoClick,
   homeHref,
   homeTitle = "Home",
   right,
   children,
 }: {
   instanceId: string;
+  /** When set, the "Hi" logo becomes a button (the Home screen uses it to open the menu). */
+  onLogoClick?: () => void;
   homeHref?: string;
   homeTitle?: string;
   right?: ReactNode;
@@ -42,7 +67,7 @@ export function DeviceHeaderChrome({
   return (
     <div className="relative flex h-[72px] flex-none items-end text-white" style={{ background: DEVICE_BLUE }}>
       <div className="absolute inset-y-0 left-0 flex items-center">
-        <HiLogo />
+        <HiLogo onClick={onLogoClick} />
       </div>
       <Link
         href={homeHref ?? `/instances/${instanceId}`}

@@ -126,7 +126,7 @@ export function Car({ color, parkX, facing, present, charging, soc, onClick }: C
         </mesh>
         {/* glasshouse */}
         <mesh geometry={cabinGeo} castShadow>
-          <meshPhysicalMaterial color="#0b1220" metalness={0.2} roughness={0.05} clearcoat={1} transmission={0} envMapIntensity={1.6} />
+          <meshPhysicalMaterial color="#16263d" metalness={0.35} roughness={0.04} clearcoat={1} envMapIntensity={2.6} />
         </mesh>
         {/* roof panel, body-coloured, so the glass reads as windows not a bubble */}
         <mesh position={[-0.42, 1.505, 0]}>
@@ -148,6 +148,41 @@ export function Car({ color, parkX, facing, present, charging, soc, onClick }: C
           )),
         )}
         {[1.38, -1.4].map((x) => [0.78, -0.78].map((z) => <Wheel key={`${x}${z}`} x={x} z={z} spin={spin} />))}
+        {/* shut lines, mirrors, belt chrome, bumpers, plates — the small cues that make the shell read as a car */}
+        {[1, -1].map((side) => (
+          <group key={`d${side}`}>
+            {[-0.45, 0.55].map((x) => (
+              <mesh key={x} position={[x, 0.7, side * 0.9]}>
+                <boxGeometry args={[0.012, 0.52, 0.004]} />
+                <meshBasicMaterial color="#0a0c10" />
+              </mesh>
+            ))}
+            <mesh position={[0.25, 0.64, side * 0.91]}>
+              <boxGeometry args={[0.16, 0.02, 0.008]} />
+              <meshStandardMaterial color="#cbd5e1" metalness={1} roughness={0.2} />
+            </mesh>
+            <mesh position={[0.62, 1.08, side * 0.99]}>
+              <boxGeometry args={[0.16, 0.09, 0.1]} />
+              <meshPhysicalMaterial color={color} metalness={0.75} roughness={0.28} clearcoat={1} />
+            </mesh>
+            <mesh position={[0, 0.97, side * 0.86]}>
+              <boxGeometry args={[3.0, 0.014, 0.012]} />
+              <meshStandardMaterial color="#d1d5db" metalness={1} roughness={0.15} />
+            </mesh>
+          </group>
+        ))}
+        <mesh position={[2.255, 0.42, 0]}>
+          <boxGeometry args={[0.05, 0.2, BODY_DEPTH - 0.3]} />
+          <meshStandardMaterial color="#14161a" roughness={0.6} />
+        </mesh>
+        <mesh position={[-2.28, 0.42, 0]}>
+          <boxGeometry args={[0.05, 0.2, BODY_DEPTH - 0.3]} />
+          <meshStandardMaterial color="#14161a" roughness={0.6} />
+        </mesh>
+        <mesh position={[2.285, 0.52, 0]} rotation={[0, Math.PI / 2, 0]}>
+          <planeGeometry args={[0.36, 0.1]} />
+          <meshStandardMaterial color="#f1f5f9" roughness={0.5} />
+        </mesh>
         {/* lights */}
         <mesh position={[2.27, 0.74, 0]}>
           <boxGeometry args={[0.02, 0.07, BODY_DEPTH - 0.45]} />

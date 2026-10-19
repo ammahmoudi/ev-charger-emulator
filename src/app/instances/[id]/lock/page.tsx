@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { BlueButton, ScreenPanel } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import type { ConnectorRuntimeView } from "@/lib/device-instances/types";
@@ -107,83 +108,39 @@ export default function LockPage() {
       <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Lock"} />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Lock</h1>
-            <p className="text-sm text-zinc-500">
-              Manual per-connector lock/unlock. Unlocking mid-session mirrors a real connector&apos;s cable release —
-              it ends the session (stop cause &quot;UnlockConnector&quot;), the same as a CSMS-initiated{" "}
-              <code className="font-mono text-xs">UnlockConnector</code> would, but triggered locally.
-            </p>
-          </div>
-
-          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
+        <ScreenPanel>
+          {error ? <p className="px-4 pt-2 text-[20px] text-[#e5302b]">{error}</p> : null}
           {connectors === null ? (
-            <p className="text-sm text-zinc-500">Loading…</p>
+            <p className="p-6 text-[24px] text-[#888]">Loading…</p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid flex-1 grid-cols-2 gap-[16px] p-[16px]">
               {connectors.map((connector) => {
                 const isPending = pending === connector.connectorId;
+                const letter = (connector.label ?? "").trim().slice(-1).toUpperCase() || String(connector.connectorId);
                 return (
-                  <div
-                    key={connector.connectorId}
-                    className="flex flex-col gap-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
-                  >
-                    <div className="flex items-center justify-between">
-                      <h2 className="text-sm font-semibold text-black dark:text-zinc-50">
-                        {connector.label ?? `Connector ${connector.connectorId}`}
-                      </h2>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                          STATUS_STYLES[connector.status] ??
-                          "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                        }`}
-                      >
-                        {connector.status}
-                      </span>
+                  <div key={connector.connectorId} className="flex flex-col items-center justify-between gap-[8px] border border-[#e3e6ea] bg-white px-[16px] py-[14px]">
+                    <div className="flex w-full items-center justify-between">
+                      <span className="flex h-[44px] w-[44px] items-center justify-center rounded-[8px] bg-[#9aa3ad] text-[28px] font-bold text-white">{letter}</span>
+                      <span className={`rounded-full px-[14px] py-[2px] text-[22px] font-medium ${STATUS_STYLES[connector.status] ?? "bg-zinc-100 text-zinc-600"}`}>{connector.status}</span>
                     </div>
-
-                    <div className="flex items-center gap-2 text-sm">
-                      <span
-                        className={`inline-flex h-2 w-2 rounded-full ${connector.locked ? "bg-zinc-800 dark:bg-zinc-200" : "bg-zinc-300 dark:bg-zinc-600"}`}
-                      />
-                      <span className="text-zinc-600 dark:text-zinc-400">
-                        {connector.locked ? "Locked" : "Unlocked"}
-                      </span>
-                      {connector.activeSession ? (
-                        <span className="text-xs text-zinc-500">
-                          · session in progress (card {connector.activeSession.idTag})
-                        </span>
-                      ) : null}
-                    </div>
-
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={isPending || connector.locked}
-                        onClick={() => handleSetLock(connector.connectorId, true)}
-                        className="flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                      >
+                    <svg viewBox="0 0 24 24" className={`h-[84px] w-[84px] ${connector.locked ? "text-[#2f8cf0]" : "text-[#b9b9b9]"}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="5" y="11" width="14" height="9" rx="2" />
+                      <path d={connector.locked ? "M8 11V8a4 4 0 0 1 8 0v3" : "M8 11V8a4 4 0 0 1 7.5-1.9"} />
+                    </svg>
+                    <p className="text-[26px] text-[#444]">
+                      {connector.locked ? "Locked" : "Unlocked"}
+                      {connector.activeSession ? <span className="text-[20px] text-[#888]"> · card {connector.activeSession.idTag}</span> : null}
+                    </p>
+                    <div className="flex gap-[12px]">
+                      <BlueButton disabled={isPending || connector.locked} onClick={() => handleSetLock(connector.connectorId, true)}>
                         Lock
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isPending || !connector.locked}
-                        onClick={() => handleSetLock(connector.connectorId, false)}
-                        className="flex-1 rounded-md bg-black px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-                      >
+                      </BlueButton>
+                      <BlueButton disabled={isPending || !connector.locked} onClick={() => handleSetLock(connector.connectorId, false)}>
                         Unlock
-                      </button>
+                      </BlueButton>
                     </div>
-
                     {connector.status === "Faulted" ? (
-                      <button
-                        type="button"
-                        disabled={isPending}
-                        onClick={() => handleClearFault(connector.connectorId)}
-                        className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-                      >
+                      <button type="button" disabled={isPending} onClick={() => handleClearFault(connector.connectorId)} className="rounded-[8px] border-2 border-[#e5302b] px-[20px] py-[2px] text-[22px] font-medium text-[#e5302b] disabled:opacity-50">
                         Clear fault
                       </button>
                     ) : null}
@@ -192,7 +149,7 @@ export default function LockPage() {
               })}
             </div>
           )}
-        </div>
+        </ScreenPanel>
 
         <DeviceBottomNav instanceId={instanceId} active="Lock" />
       </DeviceScreenFrame>

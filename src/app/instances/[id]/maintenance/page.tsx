@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ConnectorAvailabilityBadge } from "@/components/device-instances/ConnectorAvailabilityBadge";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { ScreenPanel, TabStrip } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { MaintenanceConfirmPanel } from "@/components/device-instances/MaintenanceConfirmPanel";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
@@ -24,7 +25,7 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 const primaryButtonClassName =
-  "rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+  "rounded-[8px] bg-gradient-to-b from-[#3ca0ff] to-[#1a6fd8] px-[30px] py-[6px] text-[26px] font-semibold text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.15)] disabled:opacity-50";
 
 interface InstanceHeaderInfo {
   name: string;
@@ -123,35 +124,16 @@ export default function MaintenancePage() {
       <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instance.name} />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Maintenance</h1>
-            <p className="text-sm text-zinc-500">
-              {instance.deviceModel.manufacturer} {instance.deviceModel.model}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-x-4 gap-y-2 border-b border-zinc-200 text-sm dark:border-zinc-800">
-            {TABS.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => {
-                  setActiveTab(tab.key);
-                  setMessage(null);
-                }}
-                className={`-mb-px border-b-2 px-1 pb-2 font-medium ${
-                  activeTab === tab.key
-                    ? "border-blue-600 text-blue-600 dark:text-blue-400"
-                    : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+        <ScreenPanel>
+          <TabStrip
+            tabs={TABS}
+            active={activeTab}
+            onSelect={(key) => {
+              setActiveTab(key);
+              setMessage(null);
+            }}
+          />
+          <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-[24px]">
             {activeTab === "time" ? <TimeSettingPanel /> : null}
 
         {activeTab === "events" ? (
@@ -269,8 +251,8 @@ export default function MaintenancePage() {
         ) : null}
           </div>
 
-          {message ? <p className="text-sm text-zinc-600 dark:text-zinc-400">{message}</p> : null}
-        </div>
+          {message ? <p className="pb-2 text-center text-[20px] text-[#666]">{message}</p> : null}
+        </ScreenPanel>
 
         <DeviceBottomNav instanceId={instanceId} active="Maintenance" />
       </DeviceScreenFrame>

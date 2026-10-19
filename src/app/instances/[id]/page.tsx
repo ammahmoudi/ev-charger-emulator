@@ -42,6 +42,7 @@ export default function InstanceHomePage() {
   const [connectors, setConnectors] = useState<ConnectorRuntimeView[] | null>(null);
   const [now, setNow] = useState(() => new Date());
   const embedded = useEmbedded();
+  const [menuOpen, setMenuOpen] = useState(false);
   const [connectionPending, setConnectionPending] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
   const [evPendingConnectorId, setEvPendingConnectorId] = useState<number | null>(null);
@@ -228,9 +229,10 @@ export default function InstanceHomePage() {
           statusReason={instance.statusReason}
           connectionPending={connectionPending}
           onToggleConnection={handleToggleConnection}
+          onMenu={() => setMenuOpen((v) => !v)}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col justify-between gap-2 overflow-y-auto bg-[#f4f6f8] px-[20px] pb-[10px] pt-[14px]">
+        <div className="flex min-h-0 flex-1 flex-col justify-between gap-2 overflow-y-auto bg-[#f4f6f8] px-[20px] pb-[12px] pt-[14px]">
           {connectors === null ? (
             <p className="text-center text-sm text-zinc-500">Loading…</p>
           ) : instance.connectors.length === 0 ? (
@@ -263,7 +265,14 @@ export default function InstanceHomePage() {
           </p>
         </div>
 
-        <DeviceBottomNav instanceId={instanceId} />
+        {menuOpen ? (
+          <>
+            <button type="button" aria-label="Close menu" className="absolute inset-0 z-20 cursor-default bg-black/10" onClick={() => setMenuOpen(false)} />
+            <div className="absolute inset-x-0 bottom-0 z-30 shadow-[0_-6px_18px_rgba(0,0,0,0.25)]">
+              <DeviceBottomNav instanceId={instanceId} />
+            </div>
+          </>
+        ) : null}
       </DeviceScreenFrame>
 
       <CarSimulatorPanel

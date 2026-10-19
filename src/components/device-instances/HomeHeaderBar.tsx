@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { DeviceConnectionStatus } from "@prisma/client";
 
-import { DeviceHeaderChrome } from "./DeviceHeaderChrome";
+import { DeviceHeaderChrome, LCD_FONT } from "./DeviceHeaderChrome";
 
 function formatClock(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -16,9 +16,6 @@ const CONNECTION_ICON_STYLES: Record<DeviceConnectionStatus, string> = {
   CONNECTED: "text-white",
   FAULTED: "text-red-200",
 };
-
-/** SN / clock in the device's tall, tabular numerals (reference shows a condensed LCD-style face). */
-const LCD_FONT = '"Bahnschrift", "DIN Alternate", "Arial Narrow", "DejaVu Sans Condensed", sans-serif';
 
 /**
  * Home-screen header, pixel-matched to docs/device-reference/PEVC3107E/screenshots/01-home-dual-plug.png:
@@ -35,6 +32,7 @@ export function HomeHeaderBar({
   statusReason,
   connectionPending,
   onToggleConnection,
+  onMenu,
 }: {
   instanceId: string;
   name: string;
@@ -44,12 +42,15 @@ export function HomeHeaderBar({
   statusReason: string | null;
   connectionPending: boolean;
   onToggleConnection: () => void;
+  /** Tapping the "Hi" logo opens the Device/Setting/… menu (the reference Home screen shows no bottom nav). */
+  onMenu?: () => void;
 }) {
   const isRunning = status === "CONNECTED" || status === "CONNECTING";
 
   return (
     <DeviceHeaderChrome
       instanceId={instanceId}
+      onLogoClick={onMenu}
       homeHref={`/instances/${instanceId}/status`}
       homeTitle="Status / diagnostics"
       right={

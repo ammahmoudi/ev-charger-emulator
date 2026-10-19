@@ -10,7 +10,7 @@ interface SettingsTabsProps {
 /** Tab row matching the real device's Setting screen: Device / System / Networks / Fee Rate / Other. */
 export function SettingsTabs({ active, onSelect }: SettingsTabsProps) {
   return (
-    <div className="flex overflow-x-auto border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="flex flex-none items-end px-[12px] pt-[6px]">
       {PARAMETER_CATEGORY_ORDER.map((category) => {
         const isActive = category === active;
         return (
@@ -18,10 +18,8 @@ export function SettingsTabs({ active, onSelect }: SettingsTabsProps) {
             key={category}
             type="button"
             onClick={() => onSelect(category)}
-            className={`shrink-0 border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap ${
-              isActive
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            className={`flex-1 whitespace-nowrap px-[10px] py-[8px] text-[30px] ${
+              isActive ? "rounded-t-[8px] bg-white font-medium text-[#2f8cf0] shadow-[0_-1px_4px_rgba(0,0,0,0.1)]" : "text-[#444]"
             }`}
           >
             {PARAMETER_CATEGORY_LABELS[category]}

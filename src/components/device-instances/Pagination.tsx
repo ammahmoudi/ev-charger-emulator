@@ -6,32 +6,27 @@ interface PaginationProps {
   onPageChange: (page: number) => void;
 }
 
-/** "‹ page X of Y ›" control, matching the real device's Event/Cost screen pagination footer. */
+const arrow =
+  "absolute top-1/2 z-10 flex h-[56px] w-[28px] -translate-y-1/2 items-center justify-center bg-[#eef2f6] text-[44px] leading-none text-[#2f8cf0] disabled:invisible";
+
+/** "page X of Y" footer with the blue edge arrows, matching the real device's Event/Cost screens. */
 export function Pagination({ page, pageCount, onPageChange }: PaginationProps) {
   return (
-    <div className="flex items-center justify-center gap-4 border-t border-zinc-200 py-3 text-sm text-zinc-500 dark:border-zinc-800">
-      <button
-        type="button"
-        disabled={page <= 1}
-        onClick={() => onPageChange(page - 1)}
-        aria-label="Previous page"
-        className="rounded-md px-2 py-1 text-zinc-400 hover:bg-zinc-100 hover:text-black disabled:pointer-events-none disabled:opacity-30 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
-      >
+    <>
+      <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)} aria-label="Previous page" className={`${arrow} left-0 rounded-r-[6px]`}>
         ‹
       </button>
-      <span>
-        page <span className="font-medium text-black dark:text-zinc-50">{page}</span> of{" "}
-        <span className="font-medium text-black dark:text-zinc-50">{pageCount}</span>
-      </span>
-      <button
-        type="button"
-        disabled={page >= pageCount}
-        onClick={() => onPageChange(page + 1)}
-        aria-label="Next page"
-        className="rounded-md px-2 py-1 text-zinc-400 hover:bg-zinc-100 hover:text-black disabled:pointer-events-none disabled:opacity-30 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
-      >
+      <button type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)} aria-label="Next page" className={`${arrow} right-0 rounded-l-[6px]`}>
         ›
       </button>
-    </div>
+      <div className="mt-auto flex flex-none items-baseline justify-center gap-[28px] pb-[10px] pt-[6px] text-[26px] text-[#888]">
+        <span>
+          page <span className="ml-[28px] text-[34px] text-[#444]">{page}</span>
+        </span>
+        <span>
+          of <span className="ml-[28px] text-[34px] text-[#444]">{pageCount}</span>
+        </span>
+      </div>
+    </>
   );
 }
