@@ -9,7 +9,7 @@
  *
  * Env: OCPP_URL (ws://host:8081/<stationId>), ID_TAG, CONNECTOR_ID=1, CHARGE_RATE_KW=22, METER_INTERVAL_S=2,
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
- * Exit: 0 session reached Charging and ended (by remote stop, local stop or max time); 1 error; 3 start refused by the CSMS.
+ * Exit: 0 confirmed remote stop; local stop/max time fail; 1 error; 3 start refused by the CSMS.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -30,7 +30,7 @@ const log = (dir: Frame["dir"], action: string, payload: unknown) => frames.push
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const config = new InMemoryConfigurationStore();
-const client = new OcppClient({ url, reconnect: { enabled: false } });
+const client = new OcppClient({ url, reconnect: { enabled: false }, callTimeoutMs: Number(process.env.OCPP_CALL_TIMEOUT_MS ?? 30_000) });
 
 // Record every request this charge point sends and every CSMS call it answers.
 const rawCall = client.call.bind(client);
@@ -58,6 +58,9 @@ let tx: { transactionId: number; startedAt: number; meterStart: number } | null 
 let meterTimer: NodeJS.Timeout | null = null;
 let ended: { reason: string; at: number } | null = null;
 let lastTick = 0;
+let stopConfirmed = false;
+let stopFailure: unknown = null;
+let stopTask: Promise<void> | null = null;
 
 const sample = () => {
   const now = Date.now();
@@ -67,7 +70,7 @@ const sample = () => {
 };
 const sampledValue = (wh: number, context: string) => [{ value: String(wh), context, measurand: REGISTER, unit: "Wh", location: "Outlet" }];
 
-async function finish(reason: "Remote" | "Local" | "EVDisconnected") {
+async function sendStop(reason: "Remote" | "Local" | "EVDisconnected") {
   if (!tx || ended) return;
   if (meterTimer) clearInterval(meterTimer);
   const meterStop = sample();
@@ -75,10 +78,15 @@ async function finish(reason: "Remote" | "Local" | "EVDisconnected") {
   ended = { reason, at: Date.now() };
   session.setConnectorStatus(connectorId, "Finishing");
   await rawCall("StopTransaction", { transactionId: closing.transactionId, idTag, meterStop, timestamp: new Date().toISOString(), reason, transactionData: [{ timestamp: new Date().toISOString(), sampledValue: sampledValue(meterStop, "Transaction.End") }] })
-    .then((r) => log("<-CSMS", "StopTransaction.conf", r))
-    .catch((e) => log("<-CSMS", "StopTransaction.error", String(e)));
+    .then((r) => { log("<-CSMS", "StopTransaction.conf", r); stopConfirmed = true; })
+    .catch((e) => { log("<-CSMS", "StopTransaction.error", String(e)); stopFailure = e; });
   log("->CSMS", "StopTransaction", { transactionId: closing.transactionId, meterStop, reason });
   session.setConnectorStatus(connectorId, "Available");
+}
+
+function finish(reason: "Remote" | "Local" | "EVDisconnected"): Promise<void> {
+  if (!stopTask) stopTask = sendStop(reason);
+  return stopTask;
 }
 
 // A CSMS-side stop (the adapter watchdog's RemoteStop) of the swipe-started transaction.
@@ -139,6 +147,9 @@ async function main() {
     await sleep(250);
   }
   if (!ended) await finish("Local");
+  if (stopTask) await stopTask;
+  if (stopFailure || !stopConfirmed) throw new Error(`StopTransaction unconfirmed: ${String(stopFailure ?? "no reply")}`);
+  if (ended?.reason !== "Remote") throw new Error("session ended locally or timed out; enforcement not proven");
   await sleep(1500);
   outcome = `ENDED_${ended!.reason.toUpperCase()}`;
 }
@@ -150,7 +161,7 @@ main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : Strin
   const meterValues = frames.filter((f) => f.action === "MeterValues" && f.dir === "->CSMS");
   const evidence = {
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
-    url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome,
+    url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
     meterSamples: meterValues.length, frames,
   };
@@ -159,6 +170,6 @@ main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : Strin
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, JSON.stringify(evidence, null, 2) + "\n");
   }
-  console.log(JSON.stringify({ outcome, transactionId: tx?.transactionId ?? null, deliveredWh: evidence.transaction?.deliveredWh ?? null, endedBy: ended?.reason ?? null, meterSamples: meterValues.length }));
+  console.log(JSON.stringify({ outcome, transactionId: tx?.transactionId ?? null, deliveredWh: evidence.transaction?.deliveredWh ?? null, endedBy: ended?.reason ?? null, meterSamples: meterValues.length, stopConfirmed }));
   process.exit(exitCode);
 });
