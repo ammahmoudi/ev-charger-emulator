@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 import { Car } from "./Car";
-import { Station, SCREEN_Y } from "./Station";
+import { Station, FASCIA_X, FRONT_Z, SCREEN_Y } from "./Station";
 import type { TwinPlug } from "./useTwinData";
 
 export type CameraPreset = "overview" | "screen" | "plugA" | "plugB";
@@ -17,7 +17,7 @@ const CAR_COLORS = ["#2563eb", "#e2e8f0"];
 /** [camera position, look-at target] */
 const PRESETS: Record<CameraPreset, [[number, number, number], [number, number, number]]> = {
   overview: [[0.9, 2.3, 13.4], [0, 0.95, 0]],
-  screen: [[0, SCREEN_Y, 1.02], [0, SCREEN_Y, 0.3]],
+  screen: [[FASCIA_X, SCREEN_Y, FRONT_Z + 0.62], [FASCIA_X, SCREEN_Y, 0.1]],
   plugA: [[-4.3, 1.5, 4.6], [-2.35, 0.95, 0.9]],
   plugB: [[4.3, 1.5, 4.6], [2.35, 0.95, 0.9]],
 };
@@ -54,7 +54,7 @@ function CameraRig({ preset }: { preset: CameraPreset }) {
     <CameraControls
       ref={ref}
       makeDefault
-      minDistance={0.9}
+      minDistance={0.3}
       maxDistance={18}
       maxPolarAngle={Math.PI * 0.495}
       smoothTime={0.35}
