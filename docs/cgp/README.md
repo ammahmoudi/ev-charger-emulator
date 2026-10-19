@@ -39,3 +39,15 @@ invalid/rejected configuration fails before connection. Evidence records
 `GetConfiguration` response rather than treating that local field as wire proof.
 The scripted APP wire regression verifies1second readback and periodic samples;
 it is emulator transport evidence, not a real Core/charger acceptance result.
+
+For a genuine second APP target without another process, opt in with
+`CGP_CONNECTOR_IDS=1,2` (primary `CONNECTOR_ID=1`). The headless session registers
+both connectors with the real remote-command engine and waits for real
+StatusNotification acknowledgments before READY. Inventory must separately map
+canonical connectorIndex2 to OCPP1.6 connectorId2 under the same station/EVSE.
+Its live precheck, quote and commissioning still use owner APIs. No status is
+inserted into CSMS. Unexpected secondary physical starts are recorded and fail
+the scenario; they cannot replace the primary transaction's stop evidence.
+This topology proves no concurrency behavior by itself. The APP-only probe must
+label a CSMS authorization-fence rejection separately from an eMSP account-slot
+rejection and never bypass either guard or quote freshness.

@@ -11,6 +11,7 @@
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
  * Exit: 0 confirmed remote stop; local stop/max time fail; 1 error; 3 start refused by the CSMS.
  */
+import {headlessConnectors} from './cgp-connectors';
 import {configureMeterInterval,positiveMeterInterval} from './cgp-meter-configuration';
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -21,6 +22,7 @@ const idTag = process.env.ID_TAG;
 if (!url || !idTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
 const source = process.env.SESSION_SOURCE ?? "RFID";
 const connectorId = Number(process.env.CONNECTOR_ID ?? 1);
+const connectorIds=headlessConnectors(connectorId,process.env.CGP_CONNECTOR_IDS);
 const rateKw = Number(process.env.CHARGE_RATE_KW ?? 22);
 const maxSeconds = Number(process.env.MAX_SECONDS ?? 300);
 const stopAfterS = process.env.STOP_AFTER_S ? Number(process.env.STOP_AFTER_S) : null;
@@ -38,9 +40,9 @@ const client = new OcppClient({ url, reconnect: { enabled: false }, callTimeoutM
 const rawCall = client.call.bind(client);
 (client as unknown as { call: typeof client.call }).call = (async (action: string, payload: Record<string, unknown>) => {
   log("->CSMS", action, payload);
-  if (source === "APP" && action === "StopTransaction") registerWh = Number(payload.meterStop);
+  if (source === "APP" && action === "StopTransaction" && Number(payload.transactionId)===tx?.transactionId) registerWh = Number(payload.meterStop);
   const response = await rawCall(action, payload);
-  if (source === "APP" && action === "StopTransaction") stopConfirmed = true;
+  if (source === "APP" && action === "StopTransaction" && Number(payload.transactionId)===tx?.transactionId) stopConfirmed = true;
   log("<-CSMS", `${action}.conf`, response);
   return response;
 }) as typeof client.call;
@@ -53,19 +55,21 @@ const rawRegister = client.registerHandler.bind(client);
     return result;
   })) as typeof client.registerHandler;
 
-const session = new OcppChargePointSession(client, { identity: { chargePointVendor: "EVYAR-EMU", chargePointModel: "cgp-headless" }, connectors: [{ connectorId, label: "Plug A" }] });
+const session = new OcppChargePointSession(client, { identity: { chargePointVendor: "EVYAR-EMU", chargePointModel: "cgp-headless" }, connectors: connectorIds.map(id=>({connectorId:id,label:`Plug ${id}`})) });
 session.on("error", () => {});
 const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0,
   onRemoteTransactionStarted: (_connector, info) => {
     if (source !== "APP") return;
-    const start = [...frames].reverse().find(f => f.action === "StartTransaction" && f.dir === "->CSMS")?.payload as { meterStart: number };
+    if(_connector!==connectorId){unexpectedTransactions.push({connectorId:_connector,transactionId:info.transactionId});return;}
+    const start = [...frames].reverse().find(f => f.action === "StartTransaction" && f.dir === "->CSMS" && (f.payload as {connectorId?:number}).connectorId===_connector)?.payload as { meterStart: number };
     tx = { transactionId: info.transactionId, startedAt: Date.now(), meterStart: start.meterStart };
   },
   onRemoteTransactionStopped: (_connector, info) => {
-    if (source === "APP") ended = { reason: info.reason, at: Date.now() };
+    if (source === "APP" && _connector===connectorId) ended = { reason: info.reason, at: Date.now() };
   },
 });
 
+const unexpectedTransactions:Array<{connectorId:number;transactionId:number}>=[];
 let registerWh = 0;
 let tx: { transactionId: number; startedAt: number; meterStart: number } | null = null;
 let meterTimer: NodeJS.Timeout | null = null;
@@ -126,7 +130,9 @@ async function main() {
   if (session.getBootStatus() !== "accepted") throw new Error(`BootNotification not accepted (status ${session.getBootStatus()})`);
   await sleep(500);
 
-  session.setConnectorStatus(connectorId, source === "APP" ? "Available" : "Preparing"); // remote engine accepts an available connector
+  for(const id of connectorIds)session.setConnectorStatus(id,source==="APP"||id!==connectorId?"Available":"Preparing");
+  // In opt-in topology, wait for actual OCPP acknowledgments on both connectors before READY.
+  if(process.env.CGP_CONNECTOR_IDS!==undefined)for(const id of connectorIds)await session.triggerStatusNotification(id);
   await sleep(500);
   // Optional idle phase: stay connected (answering GetConfiguration/ChangeConfiguration like a real charger) until the scenario
   // has finished commissioning, then swipe when the trigger file appears.
@@ -134,7 +140,8 @@ async function main() {
   console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
   if (source === "APP") {
     const deadline = Date.now() + maxSeconds * 1000;
-    while (!ended && Date.now() < deadline) await sleep(250);
+    while (!ended && Date.now() < deadline && !unexpectedTransactions.length) await sleep(250);
+    if(unexpectedTransactions.length)throw new Error("Unexpected physical start on secondary connector");
     if (!tx || !ended || ended.reason !== "Remote" || !stopConfirmed) throw new Error("APP session deadline or unconfirmed remote stop");
     outcome = "ENDED_REMOTE";
     return;
@@ -185,7 +192,7 @@ main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : Strin
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
     url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed, source,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
-    actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
+    connectorIds, unexpectedTransactions, actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
   };
   if (process.env.EVIDENCE_OUT) {
     const out = resolve(process.env.EVIDENCE_OUT);
