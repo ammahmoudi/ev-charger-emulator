@@ -18,6 +18,7 @@ import { InMemoryConfigurationStore, OcppChargePointSession, OcppClient, registe
 const url = process.env.OCPP_URL;
 const idTag = process.env.ID_TAG;
 if (!url || !idTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
+const source = process.env.SESSION_SOURCE ?? "RFID";
 const connectorId = Number(process.env.CONNECTOR_ID ?? 1);
 const rateKw = Number(process.env.CHARGE_RATE_KW ?? 22);
 const maxSeconds = Number(process.env.MAX_SECONDS ?? 300);
@@ -36,7 +37,9 @@ const client = new OcppClient({ url, reconnect: { enabled: false }, callTimeoutM
 const rawCall = client.call.bind(client);
 (client as unknown as { call: typeof client.call }).call = (async (action: string, payload: Record<string, unknown>) => {
   log("->CSMS", action, payload);
+  if (source === "APP" && action === "StopTransaction") registerWh = Number(payload.meterStop);
   const response = await rawCall(action, payload);
+  if (source === "APP" && action === "StopTransaction") stopConfirmed = true;
   log("<-CSMS", `${action}.conf`, response);
   return response;
 }) as typeof client.call;
@@ -51,7 +54,16 @@ const rawRegister = client.registerHandler.bind(client);
 
 const session = new OcppChargePointSession(client, { identity: { chargePointVendor: "EVYAR-EMU", chargePointModel: "cgp-headless" }, connectors: [{ connectorId, label: "Plug A" }] });
 session.on("error", () => {});
-const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0 });
+const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0,
+  onRemoteTransactionStarted: (_connector, info) => {
+    if (source !== "APP") return;
+    const start = [...frames].reverse().find(f => f.action === "StartTransaction" && f.dir === "->CSMS")?.payload as { meterStart: number };
+    tx = { transactionId: info.transactionId, startedAt: Date.now(), meterStart: start.meterStart };
+  },
+  onRemoteTransactionStopped: (_connector, info) => {
+    if (source === "APP") ended = { reason: info.reason, at: Date.now() };
+  },
+});
 
 let registerWh = 0;
 let tx: { transactionId: number; startedAt: number; meterStart: number } | null = null;
@@ -90,7 +102,7 @@ function finish(reason: "Remote" | "Local" | "EVDisconnected"): Promise<void> {
 }
 
 // A CSMS-side stop (the adapter watchdog's RemoteStop) of the swipe-started transaction.
-rawRegister("RemoteStopTransaction", async (p: Record<string, unknown>) => {
+if (source !== "APP") rawRegister("RemoteStopTransaction", async (p: Record<string, unknown>) => {
   log("<-CSMS", "RemoteStopTransaction", p);
   if (tx && Number(p.transactionId) === tx.transactionId && !ended) {
     log("->CSMS", "RemoteStopTransaction.conf", { status: "Accepted" });
@@ -110,12 +122,19 @@ async function main() {
   if (session.getBootStatus() !== "accepted") throw new Error(`BootNotification not accepted (status ${session.getBootStatus()})`);
   await sleep(500);
 
-  session.setConnectorStatus(connectorId, "Preparing"); // EV plugged in
+  session.setConnectorStatus(connectorId, source === "APP" ? "Available" : "Preparing"); // remote engine accepts an available connector
   await sleep(500);
   // Optional idle phase: stay connected (answering GetConfiguration/ChangeConfiguration like a real charger) until the scenario
   // has finished commissioning, then swipe when the trigger file appears.
   const trigger = process.env.SWIPE_TRIGGER_FILE;
   console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
+  if (source === "APP") {
+    const deadline = Date.now() + maxSeconds * 1000;
+    while (!ended && Date.now() < deadline) await sleep(250);
+    if (!tx || !ended || ended.reason !== "Remote" || !stopConfirmed) throw new Error("APP session deadline or unconfirmed remote stop");
+    outcome = "ENDED_REMOTE";
+    return;
+  }
   if (trigger) {
     const waitUntil = Date.now() + Number(process.env.IDLE_MAX_SECONDS ?? 600) * 1000;
     while (!existsSync(trigger) && Date.now() < waitUntil) await sleep(250);
@@ -161,7 +180,7 @@ main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : Strin
   const meterValues = frames.filter((f) => f.action === "MeterValues" && f.dir === "->CSMS");
   const evidence = {
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
-    url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed,
+    url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed, source,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
     meterSamples: meterValues.length, frames,
   };
