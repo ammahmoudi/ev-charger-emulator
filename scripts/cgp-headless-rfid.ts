@@ -11,7 +11,7 @@
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
  * Exit: 0 session reached Charging and ended (by remote stop, local stop or max time); 1 error; 3 start refused by the CSMS.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { InMemoryConfigurationStore, OcppChargePointSession, OcppClient, registerRemoteCommandHandlers } from "../src/lib/ocpp";
 
@@ -104,6 +104,15 @@ async function main() {
 
   session.setConnectorStatus(connectorId, "Preparing"); // EV plugged in
   await sleep(500);
+  // Optional idle phase: stay connected (answering GetConfiguration/ChangeConfiguration like a real charger) until the scenario
+  // has finished commissioning, then swipe when the trigger file appears.
+  const trigger = process.env.SWIPE_TRIGGER_FILE;
+  console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
+  if (trigger) {
+    const waitUntil = Date.now() + Number(process.env.IDLE_MAX_SECONDS ?? 600) * 1000;
+    while (!existsSync(trigger) && Date.now() < waitUntil) await sleep(250);
+    if (!existsSync(trigger)) { outcome = "IDLE_TIMEOUT"; exitCode = 3; return; }
+  }
   const auth = (await client.call("Authorize", { idTag })) as { idTagInfo?: { status?: string } };
   if (auth.idTagInfo?.status !== "Accepted") { outcome = `AUTHORIZE_${auth.idTagInfo?.status ?? "NO_ANSWER"}`; exitCode = 3; session.setConnectorStatus(connectorId, "Available"); return; }
 
