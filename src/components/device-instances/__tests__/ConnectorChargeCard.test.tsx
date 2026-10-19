@@ -25,35 +25,29 @@ describe("ConnectorChargeCard", () => {
         runtime={{ status: "Available", locked: false, evConnected: false, activeSession: null }}
         now={now}
         pending={false}
-        evPending={false}
         error={null}
         onStartCharging={onStartCharging}
         onStopCharging={noop}
         onClearFault={noop}
-        onToggleEv={noop}
       />,
     );
 
-    expect(screen.getByText("Please connect the EV or use the Plug in EV control below.")).toBeInTheDocument();
+    expect(screen.getByText("Please connect the EV or click charging button.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Charging" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Plug in EV" })).toBeEnabled();
   });
 
   it("Preparing with an EV connected and no card presented yet: shows the ready prompt and an enabled Charging button", () => {
     const onStartCharging = vi.fn();
-    const onToggleEv = vi.fn();
     render(
       <ConnectorChargeCard
         connector={connector}
         runtime={{ status: "Preparing", locked: false, evConnected: true, activeSession: null }}
         now={now}
         pending={false}
-        evPending={false}
         error={null}
         onStartCharging={onStartCharging}
         onStopCharging={noop}
         onClearFault={noop}
-        onToggleEv={onToggleEv}
       />,
     );
 
@@ -62,9 +56,6 @@ describe("ConnectorChargeCard", () => {
     expect(chargingButton).toBeEnabled();
     fireEvent.click(chargingButton);
     expect(onStartCharging).toHaveBeenCalledOnce();
-
-    fireEvent.click(screen.getByRole("button", { name: "Unplug EV" }));
-    expect(onToggleEv).toHaveBeenCalledOnce();
   });
 
   it("Charging with an active session: shows the card idTag, live energy, and a Stop button", () => {
@@ -87,12 +78,10 @@ describe("ConnectorChargeCard", () => {
         runtime={runtime}
         now={now}
         pending={false}
-        evPending={false}
         error={null}
         onStartCharging={noop}
         onStopCharging={onStopCharging}
         onClearFault={noop}
-        onToggleEv={noop}
       />,
     );
 
@@ -103,9 +92,6 @@ describe("ConnectorChargeCard", () => {
     const stopButton = screen.getByRole("button", { name: "Stop" });
     fireEvent.click(stopButton);
     expect(onStopCharging).toHaveBeenCalledOnce();
-
-    // Unplugging mid-charge is still offered, and its label warns it will stop the session.
-    expect(screen.getByRole("button", { name: "Unplug EV (stops session)" })).toBeInTheDocument();
   });
 
   it("Finishing (no active session yet): shows the idle prompt with the Charging button disabled", () => {
@@ -115,12 +101,10 @@ describe("ConnectorChargeCard", () => {
         runtime={{ status: "Finishing", locked: false, evConnected: true, activeSession: null }}
         now={now}
         pending={false}
-        evPending={false}
         error={null}
         onStartCharging={noop}
         onStopCharging={noop}
         onClearFault={noop}
-        onToggleEv={noop}
       />,
     );
 
@@ -136,12 +120,10 @@ describe("ConnectorChargeCard", () => {
         runtime={{ status: "Faulted", locked: false, evConnected: false, activeSession: null }}
         now={now}
         pending={false}
-        evPending={false}
         error={null}
         onStartCharging={noop}
         onStopCharging={noop}
         onClearFault={onClearFault}
-        onToggleEv={noop}
       />,
     );
 

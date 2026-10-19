@@ -99,27 +99,19 @@ export function ConnectorChargeCard({
   runtime,
   now,
   pending,
-  evPending,
   error,
   onStartCharging,
   onStopCharging,
   onClearFault,
-  onToggleEv,
-  showEvControl = true,
 }: {
   connector: ChargeCardConnector;
   runtime: ChargeCardRuntime | null;
   now: Date;
   pending: boolean;
-  /** Separate pending flag for the EV plug/unplug control below, so toggling it doesn't read as the Charging/Stop button being busy (and vice versa). */
-  evPending: boolean;
   error: string | null;
   onStartCharging: () => void;
   onStopCharging: () => void;
   onClearFault: () => void;
-  onToggleEv: () => void;
-  /** The reference screen has no plug/unplug control; the 3D twin hides it (plugging happens on the 3D car). */
-  showEvControl?: boolean;
 }) {
   const status = runtime?.status ?? "Available";
   const session = runtime?.activeSession ?? null;
@@ -130,9 +122,7 @@ export function ConnectorChargeCard({
 
   const idleText = evConnected
     ? "EV connected — click Charging to start."
-    : showEvControl
-      ? "Please connect the EV or use the Plug in EV control below."
-      : "Please connect the EV or click charging button.";
+    : "Please connect the EV or click charging button.";
   const charging = "w-full rounded-[6px] py-[10px] text-[34px] font-semibold leading-none text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.12)] disabled:cursor-not-allowed";
 
   return (
@@ -206,19 +196,6 @@ export function ConnectorChargeCard({
           </button>
         )}
       </div>
-
-      {showEvControl ? (
-        <button
-          type="button"
-          disabled={evPending}
-          onClick={onToggleEv}
-          className={`mt-[10px] w-full rounded-[6px] border px-4 py-[8px] text-[22px] font-medium disabled:opacity-50 ${
-            evConnected ? "border-zinc-300 text-zinc-600 hover:bg-zinc-50" : "border-sky-300 text-sky-700 hover:bg-sky-50"
-          }`}
-        >
-          {evConnected ? (isCharging || isPreparing ? "Unplug EV (stops session)" : "Unplug EV") : "Plug in EV"}
-        </button>
-      ) : null}
     </div>
   );
 }
