@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CarSimulatorPanel } from "@/components/device-instances/CarSimulatorPanel";
 import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
-import { DeviceScreenFrame, useEmbedded } from "@/components/device-instances/DeviceScreenFrame";
+import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { HomeHeaderBar } from "@/components/device-instances/HomeHeaderBar";
 import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
 import { RfidPromptModal } from "@/components/device-instances/RfidPromptModal";
@@ -41,7 +41,6 @@ export default function InstanceHomePage() {
   const [notFound, setNotFound] = useState(false);
   const [connectors, setConnectors] = useState<ConnectorRuntimeView[] | null>(null);
   const [now, setNow] = useState(() => new Date());
-  const embedded = useEmbedded();
   const [menuOpen, setMenuOpen] = useState(false);
   const [connectionPending, setConnectionPending] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
@@ -246,15 +245,10 @@ export default function InstanceHomePage() {
                   runtime={connectorByIdConnectorId.get(connector.connectorId) ?? null}
                   now={now}
                   pending={pendingConnectorId === connector.connectorId}
-                  evPending={evPendingConnectorId === connector.connectorId}
                   error={connectorErrors[connector.connectorId] || null}
-                  showEvControl={!embedded}
                   onStartCharging={() => openRfidPrompt(connector.connectorId, connector.label, connector.maxPowerKw)}
                   onStopCharging={() => handleStopCharging(connector.connectorId)}
                   onClearFault={() => handleClearFault(connector.connectorId)}
-                  onToggleEv={() =>
-                    handleToggleEv(connector.connectorId, !(connectorByIdConnectorId.get(connector.connectorId)?.evConnected ?? false))
-                  }
                 />
               ))}
             </div>
