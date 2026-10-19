@@ -5,6 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
+import { CAR_HALF_W, CAR_PORT } from "./Car";
 import type { TwinPlug } from "./useTwinData";
 
 export const STATION_W = 0.92;
@@ -35,10 +36,10 @@ export function holsterPos(index: number): THREE.Vector3 {
   const s = index === 0 ? -1 : 1;
   return new THREE.Vector3(s * (STATION_W / 2 + 0.14), 0.98, 0.1);
 }
-/** World position of a car's charge port: front-right fender, on the flank the camera sees. */
+/** World position of a car's charge port: front fender, on the flank the camera sees (+z). */
 export function carPortPos(index: number, parkX: number): THREE.Vector3 {
-  const s = index === 0 ? 1 : -1; // car A faces +x (port is 1.52 ahead of centre), car B faces -x
-  return new THREE.Vector3(parkX + s * 1.52, 0.88, 0.915);
+  const s = index === 0 ? 1 : -1; // car A faces +x (port ahead of centre), car B faces -x
+  return new THREE.Vector3(parkX + s * CAR_PORT.x, CAR_PORT.y, CAR_HALF_W + 0.012);
 }
 
 function labelTexture(draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void, w = 256, h = 256) {
@@ -52,6 +53,11 @@ function labelTexture(draw: (ctx: CanvasRenderingContext2D, w: number, h: number
   return t;
 }
 
+const GUN_LEN = 0.36;
+/** Keep cable/gun at least this far outside the car's flank (and ahead of its nose) so they can never pass through the body. */
+const CLEAR_Z = CAR_HALF_W + 0.17;
+const smooth = (x: number) => x * x * (3 - 2 * x);
+
 function Cable({ index, parkX, connected, charging }: { index: number; parkX: number; connected: boolean; charging: boolean }) {
   const mesh = useRef<THREE.Mesh>(null);
   const gun = useRef<THREE.Group>(null);
@@ -60,37 +66,55 @@ function Cable({ index, parkX, connected, charging }: { index: number; parkX: nu
   const k = useRef(connected ? 1 : 0);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const start = useMemo(() => holsterPos(index), [index]);
-  const rest = useMemo(() => start.clone().add(new THREE.Vector3(Math.sign(start.x) * 0.06, -0.05, 0.1)), [start]);
+  const sx = Math.sign(start.x);
   const port = useMemo(() => carPortPos(index, parkX), [index, parkX]);
-  const initGeo = useMemo(() => new THREE.TubeGeometry(new THREE.LineCurve3(start, rest), 2, 0.026, 8), [start, rest]);
+  // gun tip waypoints: parked in its holster -> out in front of the cabinet -> alongside the car, outside the flank -> onto the port
+  const way = useMemo(() => {
+    const rest = new THREE.Vector3(sx * (STATION_W / 2 + 0.05), 0.96, 0.2);
+    const out1 = new THREE.Vector3(start.x + sx * 0.12, 1.0, CLEAR_Z + GUN_LEN);
+    const out2 = new THREE.Vector3(port.x, port.y + 0.04, CLEAR_Z + GUN_LEN);
+    const dock = new THREE.Vector3(port.x, port.y, port.z + 0.01);
+    const pts = [rest, out1, out2, dock];
+    const len = pts.slice(1).map((p, i) => p.distanceTo(pts[i]));
+    return { pts, len, total: len.reduce((a, b) => a + b, 0) };
+  }, [start, sx, port]);
+  const initGeo = useMemo(() => new THREE.TubeGeometry(new THREE.LineCurve3(start, way.pts[0]), 2, 0.026, 8), [start, way]);
 
   useFrame((state, dt) => {
     const target = connected ? 1 : 0;
     const moving = Math.abs(k.current - target) > 0.0005;
-    if (moving) k.current += (target - k.current) * Math.min(1, dt * 2.2);
+    if (moving) k.current += (target - k.current) * Math.min(1, dt * 1.6);
     if (moving || !curve.current) {
-      const end = rest.clone().lerp(port, k.current);
-      // the free end arcs up and out while it travels, instead of cutting straight across
-      end.y += Math.sin(k.current * Math.PI) * 0.18;
-      const mid = start.clone().lerp(end, 0.5);
-      const slack = connected ? 0.28 : 0.5;
-      mid.y -= slack;
-      mid.z += 0.25 + Math.sin(k.current * Math.PI) * 0.15;
-      const a = start.clone().lerp(mid, 0.5);
-      a.y -= 0.12;
-      const b = mid.clone().lerp(end, 0.5);
-      b.y -= 0.1;
-      const c = new THREE.CatmullRomCurve3([start, a, mid, b, end], false, "catmullrom", 0.5);
+      // position along the waypoint polyline
+      let d = smooth(k.current) * way.total;
+      const tip = way.pts[0].clone();
+      for (let i = 0; i < way.len.length; i++) {
+        if (d <= way.len[i] || i === way.len.length - 1) {
+          tip.lerpVectors(way.pts[i], way.pts[i + 1], Math.min(1, d / way.len[i]));
+          break;
+        }
+        d -= way.len[i];
+      }
+      // the gun always points its nose along -z (into the station's holster / into the car's flank)
+      const rear = tip.clone().add(new THREE.Vector3(0, 0, GUN_LEN));
+      const out = Math.min(1, Math.max(0, (tip.z - 0.6) / 0.6)); // 0 = at the holster, 1 = out beside the car
+      const pts: THREE.Vector3[] = [
+        start,
+        start.clone().add(new THREE.Vector3(sx * 0.1, -0.14, 0.22)),
+        new THREE.Vector3(start.x + sx * 0.2, THREE.MathUtils.lerp(0.55, 0.95, out), THREE.MathUtils.lerp(0.5, CLEAR_Z + 0.1, out)),
+      ];
+      // mid-span: sag a little between the cabinet and the gun, but never below the flank clearance near the car
+      const mid = pts[2].clone().lerp(rear, 0.5);
+      mid.y -= 0.18 * out * (1 - k.current * 0.6);
+      if (Math.abs(mid.x - parkX) < 2.6) mid.z = Math.max(mid.z, CLEAR_Z + 0.1);
+      pts.push(mid, rear.clone().add(new THREE.Vector3(0, -0.02 - 0.12 * (1 - out), 0.22 * out)), rear);
+      const c = new THREE.CatmullRomCurve3(pts, false, "centripetal");
       curve.current = c;
       if (mesh.current) {
         mesh.current.geometry.dispose();
-        mesh.current.geometry = new THREE.TubeGeometry(c, 48, 0.026, 10, false);
+        mesh.current.geometry = new THREE.TubeGeometry(c, 64, 0.026, 10, false);
       }
-      if (gun.current) {
-        gun.current.position.copy(end);
-        const tan = c.getTangentAt(1);
-        gun.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tan.clone().negate());
-      }
+      if (gun.current) gun.current.position.copy(tip);
     }
     if (flow.current && curve.current) {
       const t = state.clock.elapsedTime;
@@ -117,17 +141,17 @@ function Cable({ index, parkX, connected, charging }: { index: number; parkX: nu
         <sphereGeometry args={[0.034, 12, 12]} />
         <meshBasicMaterial color="#7dd3fc" toneMapped={false} />
       </instancedMesh>
-      {/* CCS2 gun: grey grip, dark nose, glowing trigger strip */}
+      {/* CCS2 gun: tip at the group origin, body extends back along +z. Silver nose, grey grip, glowing strip */}
       <group ref={gun}>
-        <mesh position={[0, 0, 0.12]} castShadow>
-          <boxGeometry args={[0.085, 0.1, 0.3]} />
-          <meshStandardMaterial color="#2a2d33" roughness={0.45} metalness={0.3} />
-        </mesh>
-        <mesh position={[0, 0.0, -0.06]}>
-          <cylinderGeometry args={[0.052, 0.062, 0.1, 24]} />
+        <mesh position={[0, 0, 0.05]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.058, 0.064, 0.1, 24]} />
           <meshStandardMaterial color="#d6d9de" roughness={0.3} metalness={0.8} />
         </mesh>
-        <mesh position={[0, 0.054, 0.12]}>
+        <mesh position={[0, 0, 0.1 + 0.13]} castShadow>
+          <boxGeometry args={[0.09, 0.11, 0.26]} />
+          <meshStandardMaterial color="#2a2d33" roughness={0.45} metalness={0.3} />
+        </mesh>
+        <mesh position={[0, 0.058, 0.23]}>
           <boxGeometry args={[0.03, 0.006, 0.18]} />
           <meshStandardMaterial color="#38bdf8" emissive="#38bdf8" emissiveIntensity={charging ? 3 : 0.8} />
         </mesh>
@@ -208,6 +232,19 @@ export function Station({
     [],
   );
 
+  // The monitor is CSS3D, so WebGL geometry can't hide it: drop it whenever the camera is behind the screen plane,
+  // otherwise it would shine through the cabinet when orbiting round the back or sides.
+  const screenGroup = useRef<THREE.Group>(null);
+  const screenHtml = useRef<HTMLDivElement>(null);
+  const tmp = useMemo(() => new THREE.Vector3(), []);
+  useFrame(({ camera }) => {
+    const g = screenGroup.current;
+    const el = screenHtml.current;
+    if (!g || !el) return;
+    const local = g.worldToLocal(tmp.copy(camera.position));
+    el.style.visibility = local.z > 0.03 ? "visible" : "hidden";
+  });
+
   const bodyMat = { color: "#dfe3e8", roughness: 0.38, metalness: 0.35 } as const;
   const src = `/instances/${instanceId}?embed=1`;
 
@@ -239,8 +276,8 @@ export function Station({
       <RoundedBox args={[SCREEN_W + 0.04, SCREEN_H + 0.04, 0.012]} radius={0.008} position={[0, SCREEN_Y, STATION_D / 2 + 0.021]}>
         <meshStandardMaterial color="#030405" roughness={0.3} metalness={0.4} />
       </RoundedBox>
-      <group position={[0, SCREEN_Y, STATION_D / 2 + 0.0275]}>
-        <Html transform portal={portal} distanceFactor={DISTANCE_FACTOR} scale={HTML_SCALE} zIndexRange={[10, 0]} style={{ width: IFRAME_W, height: IFRAME_H, pointerEvents: "auto" }}>
+      <group ref={screenGroup} position={[0, SCREEN_Y, STATION_D / 2 + 0.0275]}>
+        <Html ref={screenHtml} transform portal={portal} distanceFactor={DISTANCE_FACTOR} scale={HTML_SCALE} zIndexRange={[10, 0]} style={{ width: IFRAME_W, height: IFRAME_H, pointerEvents: "auto" }}>
           <iframe
             title="Charger screen"
             src={src}

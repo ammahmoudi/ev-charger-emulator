@@ -11,15 +11,15 @@ import type { TwinPlug } from "./useTwinData";
 
 export type CameraPreset = "overview" | "screen" | "plugA" | "plugB";
 
-export const PARK_X: [number, number] = [-3.1, 3.1];
+export const PARK_X: [number, number] = [-3.55, 3.55];
 const CAR_COLORS = ["#2563eb", "#e2e8f0"];
 
 /** [camera position, look-at target] */
 const PRESETS: Record<CameraPreset, [[number, number, number], [number, number, number]]> = {
-  overview: [[0.8, 2.1, 11.8], [0, 0.95, 0]],
+  overview: [[0.9, 2.3, 13.4], [0, 0.95, 0]],
   screen: [[0, SCREEN_Y, 1.02], [0, SCREEN_Y, 0.3]],
-  plugA: [[-4.6, 1.5, 4.4], [-2.0, 0.85, 0.3]],
-  plugB: [[4.6, 1.5, 4.4], [2.0, 0.85, 0.3]],
+  plugA: [[-4.3, 1.5, 4.6], [-2.35, 0.95, 0.9]],
+  plugB: [[4.3, 1.5, 4.6], [2.35, 0.95, 0.9]],
 };
 
 /** Parking bay outline: two side lines and a back stop, in a calm slate, on the shared asphalt. */
@@ -55,7 +55,7 @@ function CameraRig({ preset }: { preset: CameraPreset }) {
       ref={ref}
       makeDefault
       minDistance={0.9}
-      maxDistance={14}
+      maxDistance={18}
       maxPolarAngle={Math.PI * 0.495}
       smoothTime={0.35}
       mouseButtons={{ left: 1, middle: 8, right: 2, wheel: 16 }}
@@ -83,11 +83,11 @@ export default function TwinScene({
     <Canvas
       shadows={lowQuality ? false : "soft"}
       dpr={lowQuality ? 1 : [1, 2]}
-      camera={{ fov: 38, near: 0.05, far: 60, position: PRESETS.overview[0] }}
+      camera={{ fov: 38, near: 0.05, far: 70, position: PRESETS.overview[0] }}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.05 }}
       onCreated={({ scene }) => {
         scene.background = new THREE.Color("#0b1018");
-        scene.fog = new THREE.Fog("#0b1018", 11, 26);
+        scene.fog = new THREE.Fog("#0b1018", 14, 30);
       }}
     >
       {/* studio-style reflections built from light panels, no network HDRI */}
