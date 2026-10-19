@@ -11,6 +11,7 @@
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
  * Exit: 0 confirmed remote stop; local stop/max time fail; 1 error; 3 start refused by the CSMS.
  */
+import {configureMeterInterval,positiveMeterInterval} from './cgp-meter-configuration';
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { InMemoryConfigurationStore, OcppChargePointSession, OcppClient, registerRemoteCommandHandlers } from "../src/lib/ocpp";
@@ -114,9 +115,11 @@ if (source !== "APP") rawRegister("RemoteStopTransaction", async (p: Record<stri
   return { status: "Rejected" };
 });
 
+let actualMeterIntervalSeconds: number|null=null;
 let exitCode = 0;
 let outcome = "INCOMPLETE";
 async function main() {
+  actualMeterIntervalSeconds=await configureMeterInterval(config,process.env.METER_INTERVAL_S);
   client.connect();
   const connectedAt = Date.now();
   while (session.getBootStatus() !== "accepted" && Date.now() - connectedAt < 30_000) await sleep(200);
@@ -152,9 +155,8 @@ async function main() {
   session.setConnectorStatus(connectorId, "Charging");
 
   const cfg = await config.list(["MeterValueSampleInterval"]);
-  // An explicit METER_INTERVAL_S wins (scenario control); otherwise the charge point's own configured sample interval applies.
-  const configured = Number(cfg.known[0]?.value);
-  const intervalS = process.env.METER_INTERVAL_S ? Number(process.env.METER_INTERVAL_S) : configured > 0 ? configured : 5;
+  // Both APP's remote engine and the RFID loop use the actual charger configuration.
+  const intervalS=positiveMeterInterval(cfg.known[0]?.value??'');
   meterTimer = setInterval(() => {
     if (!tx || ended) return;
     const wh = sample();
@@ -183,7 +185,7 @@ main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : Strin
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
     url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed, source,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
-    meterSamples: meterValues.length, frames,
+    actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
   };
   if (process.env.EVIDENCE_OUT) {
     const out = resolve(process.env.EVIDENCE_OUT);

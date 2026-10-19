@@ -29,3 +29,13 @@ npx vitest run src/lib/ocpp/__tests__/cgp-commissioning.test.ts --project node  
 CGP_EVIDENCE_OUT=docs/cgp/commissioning-evidence.json npx vitest run src/lib/ocpp/__tests__/cgp-commissioning.test.ts --project node
 DATABASE_URL=... npx vitest run src/lib/device-instances/__tests__/rfid.test.ts --project node # LocalAuthListEnabled behaviour
 ```
+
+The headless fixture applies an explicit `METER_INTERVAL_S` to its actual
+`MeterValueSampleInterval` configuration before connecting. Both APP remote starts
+and the RFID loop therefore use the configured engine cadence; the product's
+unspecified default remains60seconds. Override acceptance/readback is mandatory;
+invalid/rejected configuration fails before connection. Evidence records
+`actualMeterIntervalSeconds`; commissioning must also verify the real OCPP
+`GetConfiguration` response rather than treating that local field as wire proof.
+The scripted APP wire regression verifies1second readback and periodic samples;
+it is emulator transport evidence, not a real Core/charger acceptance result.
