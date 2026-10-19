@@ -23,6 +23,21 @@ function toView(entry: { idTag: string; status: LocalAuthEntryStatus; cacheExpir
   };
 }
 
+/**
+ * OCPP 1.6 `LocalAuthListEnabled`: whether this charger may authorize from its local list at all. Defaults to enabled when the
+ * instance has no such parameter (the charger supports the list, like a real one), and is off only when explicitly
+ * set to "false" (e.g. by a CSMS `ChangeConfiguration`).
+ */
+export async function isLocalAuthListEnabled(deviceInstanceId: string): Promise<boolean> {
+  const param = await prisma.deviceInstanceParameter.findFirst({
+    where: { deviceInstanceId, deviceModelParameter: { key: "LocalAuthListEnabled" } },
+    select: { value: true, deviceModelParameter: { select: { defaultValue: true } } },
+  });
+  if (!param) return true;
+  const value = (param.value ?? param.deviceModelParameter.defaultValue ?? "true").trim().toLowerCase();
+  return value !== "false";
+}
+
 /** Lists every local-list/cache entry for an instance, most recently updated first. */
 export async function listLocalAuthEntries(deviceInstanceId: string): Promise<LocalAuthEntryView[]> {
   const entries = await prisma.deviceInstanceLocalAuthEntry.findMany({

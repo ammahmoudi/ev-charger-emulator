@@ -21,6 +21,12 @@ const DEFAULT_CONFIGURATION_ENTRIES: OcppConfigurationEntry[] = [
     value: "Core,FirmwareManagement,LocalAuthListManagement,Reservation,SmartCharging,RemoteTrigger",
   },
   { key: "ReserveConnectorZeroSupported", readonly: true, value: "true" },
+  // Cache/offline authorization switches a CSMS that enforces its own admission has to be able to read and turn off
+  // (CGP-0012/0013). The emulator has no authorization cache (AuthorizationCache is not in SupportedFeatureProfiles) and
+  // never pre-authorizes locally; the local authorization list it does support is enabled by default, like a real charger.
+  { key: "LocalPreAuthorize", readonly: false, value: "false" },
+  { key: "AllowOfflineTxForUnknownId", readonly: false, value: "false" },
+  { key: "LocalAuthListEnabled", readonly: false, value: "true" },
   // Matches MAX_LOCAL_LIST_ENTRIES in ./local-list.ts.
   { key: "SendLocalListMaxLength", readonly: true, value: "500" },
 ];

@@ -603,6 +603,35 @@ const pevc3107eParameters: ParameterSeed[] = [
     defaultValue: "",
     sortOrder: 107,
   },
+
+  // --- OCPP 1.6 authorization switches (reported by GetConfiguration, changeable by ChangeConfiguration) ---
+  // A CSMS that enforces its own admission must be able to read and turn these off. This charger has no authorization
+  // cache (AuthorizationCache is not among its feature profiles) and never pre-authorizes locally; the local
+  // authorization list it supports is ENABLED by default, like a real charger, and honoured by `presentRfidCard`.
+  {
+    key: "LocalPreAuthorize",
+    label: "Local pre-authorize",
+    category: ParameterCategory.OTHER,
+    valueType: ParameterValueType.BOOLEAN,
+    defaultValue: "false",
+    sortOrder: 108,
+  },
+  {
+    key: "AllowOfflineTxForUnknownId",
+    label: "Allow offline transaction for unknown id",
+    category: ParameterCategory.OTHER,
+    valueType: ParameterValueType.BOOLEAN,
+    defaultValue: "false",
+    sortOrder: 109,
+  },
+  {
+    key: "LocalAuthListEnabled",
+    label: "Local authorization list enabled",
+    category: ParameterCategory.OTHER,
+    valueType: ParameterValueType.BOOLEAN,
+    defaultValue: "true",
+    sortOrder: 110,
+  },
 ];
 
 // Charge point identity for the out-of-the-box sample instance created below, so a fresh
