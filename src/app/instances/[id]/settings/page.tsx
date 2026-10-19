@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { renderParameterControl } from "@/components/device-instances/ParameterField";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { BlueButton } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { compactControlClassName, SettingsFieldRow } from "@/components/device-instances/settings/SettingsFieldRow";
@@ -140,11 +141,10 @@ export default function InstanceSettingsPage() {
       </Link>
 
       <DeviceScreenFrame>
-        <DeviceHeaderBar instanceId={instanceId} title={instance.name} />
-        <SettingsTabs active={activeTab} onSelect={selectTab} />
-
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <div className="rounded-xl bg-white p-4 shadow-sm dark:bg-zinc-900">
+        <DeviceHeaderBar instanceId={instanceId} title={instance.name} showSerial />
+        <div className="flex min-h-0 flex-1 flex-col bg-[#e9eef4] p-[14px] pt-[8px]">
+          <SettingsTabs active={activeTab} onSelect={selectTab} />
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto rounded-[8px] bg-white px-[18px] pt-[12px] shadow-[0_1px_3px_rgba(0,0,0,0.12)]">
             {activeTab === "DEVICE" ? (
               <DeviceTabContent
                 instance={instance}
@@ -170,18 +170,13 @@ export default function InstanceSettingsPage() {
                 <SettingsPager pageIndex={pageIndex} pageCount={activePages.length} onChange={setPageIndex} />
               </>
             )}
+            {error ? <p className="py-1 text-center text-[20px] text-[#e5302b]">{error}</p> : null}
+            <div className="sticky bottom-0 mt-auto flex flex-none justify-center bg-white pb-[10px] pt-[8px]">
+              <BlueButton disabled={saving} onClick={handleSave}>
+                {saving ? "Saving…" : "Save"}
+              </BlueButton>
+            </div>
           </div>
-
-          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
-          <button
-            type="button"
-            disabled={saving}
-            onClick={handleSave}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Setting" />
@@ -226,7 +221,7 @@ function DeviceTabContent({
   const [left, right] = splitIntoColumns(readOnlyRows);
 
   return (
-    <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+    <div className="grid grid-cols-2 gap-x-[14px]">
       <div className="flex flex-col">
         <SettingsFieldRow label="Name" error={fieldErrors.name}>
           <input
@@ -254,14 +249,14 @@ function DeviceTabContent({
         </SettingsFieldRow>
         {left.map((row) => (
           <SettingsFieldRow key={row.label} label={row.label}>
-            <span className="font-medium text-zinc-900 dark:text-zinc-50">{row.value}</span>
+            <span>{row.value}</span>
           </SettingsFieldRow>
         ))}
       </div>
       <div className="flex flex-col">
         {right.map((row) => (
           <SettingsFieldRow key={row.label} label={row.label}>
-            <span className="font-medium text-zinc-900 dark:text-zinc-50">{row.value}</span>
+            <span>{row.value}</span>
           </SettingsFieldRow>
         ))}
       </div>
@@ -287,7 +282,7 @@ function ParameterPage({
   const [left, right] = splitIntoColumns(parameters);
 
   return (
-    <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+    <div className="grid grid-cols-2 gap-x-[14px]">
       {[left, right].map((column, i) => (
         <div key={i} className="flex flex-col">
           {column.map((p) =>

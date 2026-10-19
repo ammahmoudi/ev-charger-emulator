@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { ScreenPanel } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DiagnosticField } from "@/components/device-instances/DiagnosticField";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
@@ -88,53 +89,31 @@ export default function PlugInterfaceBoardPage() {
       {/* No bottom nav here either, matching the real device's own drill-down screens — reached
           only via the back arrow above. */}
       <DeviceScreenFrame>
-        <DeviceHeaderBar instanceId={instanceId} title={header.name} />
+        <DeviceHeaderBar instanceId={instanceId} title={header.name} showSerial />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">{plugLabel} interface board</h1>
-          </div>
-
-          <p className="text-xs text-zinc-500">
-            Click any status value to inject/clear a fault for testing — faulted fields render red. KM1/KM2 toggle between open and closed.
-          </p>
-
-          <div className="grid grid-cols-1 gap-x-10 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-4 sm:grid-cols-2 sm:divide-y-0 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-              <DiagnosticField label="AD Sampling voltage (V)" value={board.adSamplingVoltage.toFixed(1)} />
-              <DiagnosticField
-                label="SECC communication"
-                value={board.seccCommunication}
-                status={board.seccCommunication}
-                onToggle={(next) => toggleHealth("seccCommunication", next)}
-              />
-              <DiagnosticField label="Temperature sampling1 (°C)" value={String(board.temperatureSampling1)} />
-              <DiagnosticField label="Temperature sampling2 (°C)" value={String(board.temperatureSampling2)} />
-              <DiagnosticField
-                label="Meter communication"
-                value={board.meterCommunication}
-                status={board.meterCommunication}
-                onToggle={(next) => toggleHealth("meterCommunication", next)}
-              />
-              <DiagnosticField label="PLC Error code" value={board.plcErrorCode} />
+        <ScreenPanel title={`${plugLabel} interface board`}>
+          <div className="grid grid-cols-2 content-start gap-x-[16px] px-[16px]">
+            <div className="flex flex-col">
+              <DiagnosticField label="AD Sampling voltage(V):" value={board.adSamplingVoltage.toFixed(1)} />
+              <DiagnosticField label="SECC communication:" value={board.seccCommunication} status={board.seccCommunication} onToggle={(next) => toggleHealth("seccCommunication", next)} />
+              <DiagnosticField label="Temperature sampling1(℃):" value={String(board.temperatureSampling1)} />
+              <DiagnosticField label="Temperature sampling2(℃):" value={String(board.temperatureSampling2)} />
+              <DiagnosticField label="Meter communication:" value={board.meterCommunication} status={board.meterCommunication} onToggle={(next) => toggleHealth("meterCommunication", next)} />
+              <DiagnosticField label="PLC Error code:" value={board.plcErrorCode} />
             </div>
-
-            <div className="divide-y divide-zinc-200 pt-4 sm:pt-0 dark:divide-zinc-800">
-              <DiagnosticField
-                label="Interface board communication"
-                value={board.interfaceBoardCommunication}
-                status={board.interfaceBoardCommunication}
-                onToggle={(next) => toggleHealth("interfaceBoardCommunication", next)}
-              />
-              <DiagnosticField label="Fuse status" value={board.fuseStatus} status={board.fuseStatus} onToggle={(next) => toggleHealth("fuseStatus", next)} />
-              <DiagnosticField label="EV Error code" value={String(board.evErrorCode)} />
-              <DiagnosticField label="KM1 status" value={board.km1Status} onToggle={() => toggleContact("km1Status", board.km1Status)} />
-              <DiagnosticField label="KM2 status" value={board.km2Status} onToggle={() => toggleContact("km2Status", board.km2Status)} />
-              <DiagnosticField label="CC voltage (V)" value={board.ccVoltage.toFixed(2)} />
-              <DiagnosticField label="Energy total (kWh)" value={board.energyTotal.toFixed(3)} />
+            <div className="flex flex-col">
+              <DiagnosticField label="Interface board communication:" value={board.interfaceBoardCommunication} status={board.interfaceBoardCommunication} onToggle={(next) => toggleHealth("interfaceBoardCommunication", next)} />
+              <DiagnosticField label="Fuse status:" value={board.fuseStatus} status={board.fuseStatus} onToggle={(next) => toggleHealth("fuseStatus", next)} />
+              <DiagnosticField label="EV Error code:" value={String(board.evErrorCode)} />
+              <div className="grid grid-cols-2">
+                <DiagnosticField label="KM1 status:" value={board.km1Status} onToggle={() => toggleContact("km1Status", board.km1Status)} />
+                <DiagnosticField label="KM2 status:" value={board.km2Status} onToggle={() => toggleContact("km2Status", board.km2Status)} />
+              </div>
+              <DiagnosticField label="CC voltage(V):" value={board.ccVoltage.toFixed(2)} />
+              <DiagnosticField label="Bottom of the table value(kWh):" value={board.energyTotal.toFixed(3)} />
             </div>
           </div>
-        </div>
+        </ScreenPanel>
       </DeviceScreenFrame>
     </div>
   );

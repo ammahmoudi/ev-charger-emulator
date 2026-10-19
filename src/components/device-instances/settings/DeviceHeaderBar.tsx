@@ -1,20 +1,56 @@
-import Link from "next/link";
+"use client";
 
-/** Blue top bar matching the real device's Setting screens — home icon + instance name. */
-export function DeviceHeaderBar({ instanceId, title }: { instanceId: string; title: string }) {
+import { useEffect, useState } from "react";
+
+import { DeviceHeaderChrome, LCD_FONT, SignalGlyph } from "../DeviceHeaderChrome";
+
+const serialCache = new Map<string, string>();
+
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+/**
+ * Blue header shared by the device's secondary screens. On the real unit every screen shows the same
+ * strip: "Hi" logo, white home tab, live clock and the signal glyph (the Home and status screens also
+ * show `SN:`). `title` is only kept as an accessible/hover label.
+ */
+export function DeviceHeaderBar({ instanceId, title, showSerial = false }: { instanceId: string; title: string; showSerial?: boolean }) {
+  const [now, setNow] = useState(() => new Date());
+  const [serial, setSerial] = useState<string | null>(serialCache.get(instanceId) ?? null);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!showSerial || serialCache.has(instanceId)) return;
+    let cancelled = false;
+    fetch(`/api/device-instances/${instanceId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const sn = d?.instance?.chargePointId as string | undefined;
+        if (sn && !cancelled) {
+          serialCache.set(instanceId, sn);
+          setSerial(sn);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [instanceId, showSerial]);
+
   return (
-    <div className="flex items-center gap-3 bg-blue-600 px-4 py-3 text-white">
-      <Link
-        href={`/instances/${instanceId}`}
-        title="Back to device"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/15 hover:bg-white/25"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
-          <path d="M3 11.5 12 4l9 7.5" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </Link>
-      <span className="truncate text-sm font-medium">{title}</span>
-    </div>
+    <DeviceHeaderChrome instanceId={instanceId} homeTitle="Back to device" right={<SignalGlyph />}>
+      <span className="sr-only">{title}</span>
+      {showSerial && serial ? (
+        <span className="text-[32px] font-semibold tracking-wide" style={{ fontFamily: LCD_FONT }}>{`SN: ${serial}`}</span>
+      ) : null}
+      <span className="ml-auto text-[36px] font-semibold tabular-nums tracking-wide" style={{ fontFamily: LCD_FONT }}>
+        {`${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`}
+      </span>
+    </DeviceHeaderChrome>
   );
 }

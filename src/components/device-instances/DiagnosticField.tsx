@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 
+import { Cell, VALUE_FONT } from "./DeviceScreenParts";
+
 interface DiagnosticFieldProps {
   label: string;
   value: string;
@@ -15,30 +17,28 @@ interface DiagnosticFieldProps {
 /** One label/value row for the status/diagnostics screens. Faulted fields render red per issue #4's acceptance criteria. */
 export function DiagnosticField({ label, value, status, onToggle, detailsHref }: DiagnosticFieldProps) {
   const isAbnormal = status === "abnormal";
-  const colorClass = status === undefined ? "text-black dark:text-zinc-50" : isAbnormal ? "text-red-600 dark:text-red-400" : "text-black dark:text-zinc-50";
+  const colorClass = isAbnormal ? "text-[#e5302b]" : "text-[#333]";
+  const numeric = /^[\d.\-+x]/i.test(value) && status === undefined;
+  const valueStyle = numeric ? { fontFamily: VALUE_FONT } : undefined;
 
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1.5 text-sm">
-      <span className="text-zinc-600 dark:text-zinc-400">{label}</span>
-      <div className="flex items-center gap-3">
+    <Cell label={label}>
+      <span className="flex items-center gap-4">
         {onToggle ? (
-          <button
-            type="button"
-            onClick={() => onToggle(isAbnormal ? "normal" : "abnormal")}
-            title="Click to toggle fault injection"
-            className={`cursor-pointer font-medium hover:underline ${colorClass}`}
-          >
+          <button type="button" onClick={() => onToggle(isAbnormal ? "normal" : "abnormal")} title="Click to toggle fault injection" className={`cursor-pointer text-[30px] ${colorClass}`}>
             {value}
           </button>
         ) : (
-          <span className={`font-medium ${colorClass}`}>{value}</span>
+          <span className={`text-[30px] ${colorClass}`} style={valueStyle}>
+            {value}
+          </span>
         )}
         {detailsHref ? (
-          <Link href={detailsHref} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+          <Link href={detailsHref} className="text-[24px] text-[#1f7fe0]">
             Details
           </Link>
         ) : null}
-      </div>
-    </div>
+      </span>
+    </Cell>
   );
 }

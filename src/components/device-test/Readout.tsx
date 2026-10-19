@@ -7,8 +7,8 @@
 const FLAGGED_VALUES = new Set(["Open", "Error", "Blown", "Unlocked", "Fault", "Offline", "Disconnected"]);
 
 function toneClassName(value: string): string {
-  if (FLAGGED_VALUES.has(value)) return "text-amber-700 dark:text-amber-400";
-  return "text-black dark:text-zinc-50";
+  if (FLAGGED_VALUES.has(value)) return "text-[#d97706]";
+  return "text-[#333]";
 }
 
 interface ReadoutProps {
@@ -21,11 +21,11 @@ interface ReadoutProps {
 export function Readout({ label, value, unit }: ReadoutProps) {
   const display = typeof value === "number" ? value.toString() : value;
   return (
-    <div className="flex flex-col gap-0.5 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
-      <span className="text-xs text-zinc-500">{label}</span>
-      <span className={`text-sm font-medium ${typeof value === "string" ? toneClassName(value) : "text-black dark:text-zinc-50"}`}>
+    <div className="flex min-h-[54px] items-center justify-between gap-2 border border-[#e3e6ea] bg-white px-[12px] py-[2px]">
+      <span className="text-[22px] leading-[24px] text-[#4a4a4a]">{label}</span>
+      <span className={`text-[28px] ${typeof value === "string" ? toneClassName(value) : "text-[#333]"}`}>
         {display}
-        {unit ? <span className="ml-1 text-xs font-normal text-zinc-400">{unit}</span> : null}
+        {unit ? <span className="ml-1 text-[18px] text-[#999]">{unit}</span> : null}
       </span>
     </div>
   );
@@ -46,23 +46,22 @@ interface ActionButtonGroupProps {
 
 /** A labeled row of manual test-action buttons, e.g. "Contactor action" → Start / Stop. */
 export function ActionButtonGroup({ label, options, activeValue, disabled, onAction }: ActionButtonGroupProps) {
+  const tone = (v: string) => (v === "stop" ? "from-[#ff5a52] to-[#d6241d]" : "from-[#4cd45c] to-[#1fa032]");
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="w-44 shrink-0 text-sm text-zinc-700 dark:text-zinc-300">{label}</span>
-      <div className="flex gap-2">
+    <div className="flex flex-wrap items-center gap-[10px]">
+      <span className="min-w-[210px] text-[22px] leading-[24px] text-[#4a4a4a]">{label}</span>
+      <div className="flex gap-[10px]">
         {options.map((option) => (
           <button
             key={option.value}
             type="button"
             disabled={disabled}
             onClick={() => onAction(option.value)}
-            className={`rounded-md border px-3 py-1 text-xs font-medium disabled:opacity-50 ${
-              activeValue === option.value
-                ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
-                : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className={`rounded-[4px] bg-gradient-to-b px-[18px] py-[2px] text-[24px] font-bold uppercase tracking-wide text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.2)] disabled:opacity-50 ${tone(option.value)} ${
+              activeValue === option.value ? "ring-2 ring-[#1a6fd8] ring-offset-1" : ""
             }`}
           >
-            {option.label}
+            ▶ {option.label}
           </button>
         ))}
       </div>

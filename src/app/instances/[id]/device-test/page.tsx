@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
+import { ScreenPanel, TabStrip } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { ActionButtonGroup, Readout } from "@/components/device-test/Readout";
@@ -143,31 +144,10 @@ export default function DeviceTestPage() {
       <DeviceScreenFrame>
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Device (hardware test)"} />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-lg font-semibold text-black dark:text-zinc-50">Device (hardware test)</h1>
-            <p className="text-sm text-zinc-500">Manual hardware diagnostics.</p>
-          </div>
-
-          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
-
-          <div className="flex flex-wrap gap-2 border-b border-zinc-200 pb-2 dark:border-zinc-800">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                  tab === t.key
-                    ? "bg-black text-white dark:bg-white dark:text-black"
-                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
+        <ScreenPanel>
+          {error ? <p className="px-4 pt-1 text-[18px] text-[#e5302b]">{error}</p> : null}
+          <TabStrip tabs={tabs} active={tab} onSelect={setTab} />
+          <div className="min-h-0 flex-1 overflow-y-auto px-[14px] pt-[10px]">
           {tab === "chargingTest" ? (
             <ChargingTestTab state={state} pending={pending} runAction={runAction} updateSettings={updateSettings} />
           ) : tab === "pile" ? (
@@ -179,7 +159,8 @@ export default function DeviceTestPage() {
               runAction={runAction}
             />
           )}
-        </div>
+          </div>
+        </ScreenPanel>
 
         <DeviceBottomNav instanceId={instanceId} active="Device" />
       </DeviceScreenFrame>
@@ -215,14 +196,14 @@ function ChargingTestTab({
         ))}
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <div className="flex flex-col gap-3 border-t border-[#e3e6ea] pt-[10px]">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="w-44 shrink-0 text-sm text-zinc-700 dark:text-zinc-300">Plug select</span>
+          <span className="w-[230px] shrink-0 text-[22px] text-[#4a4a4a]">Plug select</span>
           <select
             disabled={pending}
             value={state.chargingTest.selectedConnectorId}
             onChange={(e) => updateSettings({ selectedConnectorId: Number(e.target.value) })}
-            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="border-0 border-b border-dashed border-[#c5cbd3] bg-transparent px-2 py-0 text-[26px] text-[#222] focus:outline-none"
           >
             {state.plugs.map((plug) => (
               <option key={plug.connectorId} value={plug.connectorId}>
@@ -244,7 +225,7 @@ function ChargingTestTab({
         />
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="w-44 shrink-0 text-sm text-zinc-700 dark:text-zinc-300">Interface board Test mode</span>
+          <span className="w-[230px] shrink-0 text-[22px] text-[#4a4a4a]">Interface board Test mode</span>
           <button
             type="button"
             disabled={pending}
@@ -260,12 +241,12 @@ function ChargingTestTab({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="w-44 shrink-0 text-sm text-zinc-700 dark:text-zinc-300">Output mode</span>
+          <span className="w-[230px] shrink-0 text-[22px] text-[#4a4a4a]">Output mode</span>
           <select
             disabled={pending}
             value={state.chargingTest.outputMode}
             onChange={(e) => updateSettings({ outputMode: e.target.value as ChargingOutputMode })}
-            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="border-0 border-b border-dashed border-[#c5cbd3] bg-transparent px-2 py-0 text-[26px] text-[#222] focus:outline-none"
           >
             <option value="FullLoadOutput">Full load output</option>
             <option value="HalfLoadOutput">Half load output</option>
@@ -279,7 +260,7 @@ function ChargingTestTab({
 function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestState }) {
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 ">
         <Readout label="CC1 status" value={plug.cc1} />
         <Readout label="CC2 status" value={plug.cc2} />
         <Readout label="KM1 status" value={plug.km1} />
@@ -289,7 +270,7 @@ function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestSt
         <Readout label="Assist power supply status" value={plug.assistPowerStatus} />
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <div className="flex flex-col gap-3 border-t border-[#e3e6ea] pt-[10px]">
         <ActionButtonGroup
           label="Contactor action"
           disabled={pending}
@@ -323,7 +304,7 @@ function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestSt
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200 pt-4 sm:grid-cols-3 dark:border-zinc-800">
+      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200 pt-4  dark:border-zinc-800">
         <Readout label="Electronic lock status" value={plug.lockStatus} />
         <Readout label="Meter status" value={plug.meterStatus} />
         <Readout label="Communication status" value={plug.commStatus} />
@@ -346,7 +327,7 @@ function PileTestTab({ state, pending, runAction }: TabProps & { state: Hardware
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 ">
         <Readout label="Circuit breaker status" value={pile.breakerStatus} />
         <Readout label="Power contactor status" value={pile.powerContactor} />
         <Readout label="GPRS status" value={pile.gprsStatus} />
@@ -357,7 +338,7 @@ function PileTestTab({ state, pending, runAction }: TabProps & { state: Hardware
         <Readout label="Temperature 4" value={pile.temp4C} unit="°C" />
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <div className="flex flex-col gap-3 border-t border-[#e3e6ea] pt-[10px]">
         <ActionButtonGroup
           label="Three-phase AC contactor"
           disabled={pending}
@@ -400,7 +381,7 @@ function PileTestTab({ state, pending, runAction }: TabProps & { state: Hardware
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200 pt-4 sm:grid-cols-3 dark:border-zinc-800">
+      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200 pt-4  dark:border-zinc-800">
         <Readout label="Relative humidity" value={pile.humidityPercent} unit="%" />
         <Readout label="Module status" value={pile.moduleStatus} />
         <Readout label="Uab voltage" value={pile.uabVoltageV} unit="V" />

@@ -17,13 +17,12 @@ export function MaintenanceConfirmPanel({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-4 py-10 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-red-600 text-2xl font-bold text-white">
-        !
-      </span>
-      <p className="text-lg font-bold text-red-600 dark:text-red-400">【{prompt}】whether or not?</p>
-      {detail ? <div className="max-w-sm text-sm text-zinc-500">{detail}</div> : null}
-      <div className="flex flex-wrap items-center justify-center gap-3 pt-2">{children}</div>
+    <div className="flex flex-col items-center gap-[10px] py-[10px] text-center">
+      <span className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#e5302b] text-[44px] font-bold leading-none text-white">!</span>
+      <p className="text-[46px] leading-[50px] text-[#e5302b]">【{prompt}】</p>
+      <p className="text-[30px] tracking-wide text-[#666]">whether or not?</p>
+      {detail ? <div className="max-w-[760px] text-[20px] leading-[24px] text-[#999]">{detail}</div> : null}
+      <div className="flex flex-wrap items-center justify-center gap-[16px] pt-[2px]">{children}</div>
     </div>
   );
 }
