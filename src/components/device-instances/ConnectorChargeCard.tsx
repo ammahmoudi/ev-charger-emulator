@@ -52,16 +52,38 @@ function formatElapsed(startedAt: string, now: Date): string {
  * rather than a connector — removed here.
  */
 function ConnectorGlyph({ className }: { className?: string }) {
+  // CCS2 inlet as drawn on the real screen (01-home-dual-plug.png): a rounded-square upper housing
+  // holding a ring of seven signal pins, above the two large DC-pin rings, all in one outline.
   return (
-    <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth={2} className={className}>
-      <circle cx="32" cy="24" r="15" />
-      <circle cx="32" cy="16" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="39" cy="20" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="36" cy="28" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="28" cy="28" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="25" cy="20" r="2.5" fill="currentColor" stroke="none" />
-      <rect x="23" y="42" width="7" height="11" rx="2" />
-      <rect x="34" y="42" width="7" height="11" rx="2" />
+    <svg viewBox="0 0 80 100" fill="none" stroke="currentColor" strokeWidth={3} className={className}>
+      <path d="M40 4c17 0 29 11 29 27 0 9-3 15-8 20H19c-5-5-8-11-8-20C11 15 23 4 40 4Z" />
+      {[
+        [40, 15],
+        [53, 22],
+        [53, 36],
+        [27, 22],
+        [27, 36],
+        [40, 43],
+        [40, 29],
+      ].map(([cx, cy]) => (
+        <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={4.2} fill="currentColor" stroke="none" />
+      ))}
+      <circle cx="24" cy="76" r="13" strokeWidth={5} />
+      <circle cx="56" cy="76" r="13" strokeWidth={5} />
+      <circle cx="24" cy="76" r="5" fill="currentColor" stroke="none" opacity="0.45" />
+      <circle cx="56" cy="76" r="5" fill="currentColor" stroke="none" opacity="0.45" />
+    </svg>
+  );
+}
+
+/** The grey shield-shaped plug badge at the card's top-left (reference: a shield with a white A/B). */
+function ShieldBadge({ letter }: { letter: string }) {
+  return (
+    <svg viewBox="0 0 40 46" className="absolute left-[10px] top-[8px] h-[58px] w-[50px]" aria-hidden>
+      <path d="M20 2 36 7v18c0 9-7 15-16 19C11 40 4 34 4 25V7l16-5Z" fill="#9aa3ad" stroke="#c9ced4" strokeWidth="2" />
+      <text x="20" y="29" textAnchor="middle" fontSize="22" fontWeight="700" fill="#fff" fontFamily="Arial, sans-serif">
+        {letter}
+      </text>
     </svg>
   );
 }
@@ -83,6 +105,7 @@ export function ConnectorChargeCard({
   onStopCharging,
   onClearFault,
   onToggleEv,
+  showEvControl = true,
 }: {
   connector: ChargeCardConnector;
   runtime: ChargeCardRuntime | null;
@@ -95,6 +118,8 @@ export function ConnectorChargeCard({
   onStopCharging: () => void;
   onClearFault: () => void;
   onToggleEv: () => void;
+  /** The reference screen has no plug/unplug control; the 3D twin hides it (plugging happens on the 3D car). */
+  showEvControl?: boolean;
 }) {
   const status = runtime?.status ?? "Available";
   const session = runtime?.activeSession ?? null;
@@ -103,17 +128,20 @@ export function ConnectorChargeCard({
   const isCharging = status === "Charging" && session !== null;
   const isFaulted = status === "Faulted";
 
+  const idleText = evConnected
+    ? "EV connected — click Charging to start."
+    : showEvControl
+      ? "Please connect the EV or use the Plug in EV control below."
+      : "Please connect the EV or click charging button.";
+  const charging = "w-full rounded-[6px] py-[10px] text-[34px] font-semibold leading-none text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.12)] disabled:cursor-not-allowed";
+
   return (
-    <div className="flex flex-1 flex-col gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-zinc-900">
-      <div className="flex items-start justify-between">
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-200 text-xs font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-          {badgeLetter(connector.label, connector.connectorId)}
-        </span>
-        <span className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{connector.connectorType}</span>
-      </div>
+    <div className="relative flex flex-1 flex-col rounded-[8px] bg-white px-[20px] pb-[18px] pt-[16px] shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
+      <ShieldBadge letter={badgeLetter(connector.label, connector.connectorId)} />
+      <span className="absolute right-[22px] top-[18px] text-[26px] text-[#555]">{connector.connectorType}</span>
 
       <ConnectorGlyph
-        className={`mx-auto h-16 w-16 ${
+        className={`mx-auto mt-[2px] h-[168px] w-[134px] ${
           isCharging
             ? "text-emerald-500"
             : isPreparing
@@ -122,96 +150,75 @@ export function ConnectorChargeCard({
                 ? "text-red-400"
                 : evConnected
                   ? "text-sky-400"
-                  : "text-zinc-300 dark:text-zinc-700"
+                  : "text-[#b9b9b9]"
         }`}
       />
 
-      {isPreparing && session ? (
-        <div className="flex flex-col items-center gap-1 text-center text-sm">
-          <p className="font-medium text-amber-600 dark:text-amber-400">Preparing — authorizing card {session.idTag}…</p>
-          <p className="font-mono text-xs text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
-        </div>
-      ) : isCharging && session ? (
-        <div className="flex flex-col items-center gap-1 text-center text-sm">
-          <p className="font-medium text-emerald-600 dark:text-emerald-400">Charging — card {session.idTag}</p>
-          <p className="font-mono text-xs text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
-          <p className="text-zinc-700 dark:text-zinc-300">
-            {(liveEnergyWh(session.startedAt, session.chargeRateKw, now) / WH_PER_KWH).toFixed(3)} kWh
-            <span className="text-zinc-400"> · {session.chargeRateKw} kW</span>
-          </p>
-        </div>
-      ) : isFaulted ? (
-        <p className="text-center text-sm text-red-600 dark:text-red-400">
-          Connector fault — clear it below or from the Lock screen.
-        </p>
-      ) : (
-        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
-          {evConnected ? "EV connected — click Charging to start." : "Please connect the EV or use the Plug in EV control below."}
-        </p>
-      )}
+      <div className="mt-[18px] flex min-h-[78px] flex-col items-center justify-center text-center text-[24px] leading-[30px] text-[#222]">
+        {isPreparing && session ? (
+          <>
+            <p className="font-medium text-amber-600">Preparing — authorizing card {session.idTag}…</p>
+            <p className="font-mono text-[20px] text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
+          </>
+        ) : isCharging && session ? (
+          <>
+            <p className="font-medium text-emerald-600">Charging — card {session.idTag}</p>
+            <p className="font-mono text-[20px] text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
+            <p>
+              {(liveEnergyWh(session.startedAt, session.chargeRateKw, now) / WH_PER_KWH).toFixed(3)} kWh
+              <span className="text-zinc-400"> · {session.chargeRateKw} kW</span>
+            </p>
+          </>
+        ) : isFaulted ? (
+          <p className="text-red-600">Connector fault — clear it below or from the Lock screen.</p>
+        ) : (
+          <p className="max-w-[360px]">{idleText}</p>
+        )}
+      </div>
 
-      {error ? <p className="text-center text-xs text-red-600 dark:text-red-400">{error}</p> : null}
+      {error ? <p className="mt-1 text-center text-[18px] text-red-600">{error}</p> : null}
 
-      {isFaulted ? (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={onClearFault}
-          className="w-full rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-        >
-          Clear fault
-        </button>
-      ) : isPreparing ? (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={onStopCharging}
-          className="w-full rounded-md border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-900 dark:text-amber-400 dark:hover:bg-amber-950"
-        >
-          Cancel
-        </button>
-      ) : isCharging ? (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={onStopCharging}
-          className="w-full rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-900 disabled:opacity-50 dark:bg-zinc-200 dark:text-black dark:hover:bg-white"
-        >
-          Stop
-        </button>
-      ) : (
-        <button
-          type="button"
-          // A connected EV with no session yet is always "Preparing" (see connector-sessions.ts's
-          // connectEv) — real StatusNotification traffic goes Available -> Preparing the moment a
-          // cable connects, before any card is presented. "Available" itself means no EV at all.
-          disabled={pending || !evConnected || status !== "Preparing" || session !== null}
-          onClick={onStartCharging}
-          className="w-full rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-        >
-          Charging
-        </button>
-      )}
+      <div className="mt-[14px]">
+        {isFaulted ? (
+          <button type="button" disabled={pending} onClick={onClearFault} className={`${charging} bg-[#e5302b] disabled:opacity-50`}>
+            Clear fault
+          </button>
+        ) : isPreparing ? (
+          <button type="button" disabled={pending} onClick={onStopCharging} className={`${charging} bg-[#f0a30a] disabled:opacity-50`}>
+            Cancel
+          </button>
+        ) : isCharging ? (
+          <button type="button" disabled={pending} onClick={onStopCharging} className={`${charging} bg-[#e5302b] disabled:opacity-50`}>
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            // A connected EV with no session yet is always "Preparing" (see connector-sessions.ts's
+            // connectEv) — "Available" itself means no EV at all. The reference screen keeps the
+            // button full-colour regardless; it just does nothing until an EV is present.
+            disabled={pending || !evConnected || status !== "Preparing" || session !== null}
+            onClick={onStartCharging}
+            className={`${charging} disabled:opacity-100`}
+            style={{ background: "linear-gradient(#3fd04f, #2fb83f)" }}
+          >
+            Charging
+          </button>
+        )}
+      </div>
 
-      {/*
-       * EV plug/unplug — the physical cable/car, independent of the Charging/Stop button above
-       * (which represents authorization). Always shown, regardless of session state: unplugging
-       * while Preparing or Charging force-stops the session (stopCause "EV Disconnected"),
-       * mirroring a real cable pull, so this control stays the one place that always reflects
-       * (and controls) whether a car is actually there.
-       */}
-      <button
-        type="button"
-        disabled={evPending}
-        onClick={onToggleEv}
-        className={`w-full rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-50 ${
-          evConnected
-            ? "border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-            : "border-sky-300 text-sky-700 hover:bg-sky-50 dark:border-sky-900 dark:text-sky-400 dark:hover:bg-sky-950"
-        }`}
-      >
-        {evConnected ? (isCharging || isPreparing ? "Unplug EV (stops session)" : "Unplug EV") : "Plug in EV"}
-      </button>
+      {showEvControl ? (
+        <button
+          type="button"
+          disabled={evPending}
+          onClick={onToggleEv}
+          className={`mt-[10px] w-full rounded-[6px] border px-4 py-[8px] text-[22px] font-medium disabled:opacity-50 ${
+            evConnected ? "border-zinc-300 text-zinc-600 hover:bg-zinc-50" : "border-sky-300 text-sky-700 hover:bg-sky-50"
+          }`}
+        >
+          {evConnected ? (isCharging || isPreparing ? "Unplug EV (stops session)" : "Unplug EV") : "Plug in EV"}
+        </button>
+      ) : null}
     </div>
   );
 }

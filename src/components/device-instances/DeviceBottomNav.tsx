@@ -77,8 +77,10 @@ export type DeviceBottomNavKey = (typeof NAV_ITEMS)[number]["label"];
  * route) via the home icon in each screen's header bar, not the bottom nav.
  */
 export function DeviceBottomNav({ instanceId, active }: { instanceId: string; active?: DeviceBottomNavKey }) {
+  // Reference (05-settings-device.png): light-grey strip, the active item is a white raised tab
+  // with a blue icon + label; inactive items are grey. Sized for the stage's 2x scale.
   return (
-    <div className="flex border-t border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="flex h-[88px] flex-none bg-[#ededed]">
       {NAV_ITEMS.map((item) => {
         const isActive = item.label === active;
         const Icon = item.icon;
@@ -86,13 +88,11 @@ export function DeviceBottomNav({ instanceId, active }: { instanceId: string; ac
           <Link
             key={item.label}
             href={item.href(instanceId)}
-            className={`flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium ${
-              isActive
-                ? "text-blue-600"
-                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            className={`flex flex-1 flex-col items-center justify-center gap-1 text-[20px] font-medium ${
+              isActive ? "bg-white text-[#0b72c4] shadow-[0_-2px_6px_rgba(0,0,0,0.12)]" : "text-[#5f5f5f] hover:bg-[#e4e4e4]"
             }`}
           >
-            <Icon className="h-5 w-5" />
+            <Icon className="h-[40px] w-[40px]" />
             {item.label}
           </Link>
         );

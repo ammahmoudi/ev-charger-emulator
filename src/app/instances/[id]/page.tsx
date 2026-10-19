@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CarSimulatorPanel } from "@/components/device-instances/CarSimulatorPanel";
 import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
-import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
+import { DeviceScreenFrame, useEmbedded } from "@/components/device-instances/DeviceScreenFrame";
 import { HomeHeaderBar } from "@/components/device-instances/HomeHeaderBar";
 import { PostChargeSummaryModal } from "@/components/device-instances/PostChargeSummaryModal";
 import { RfidPromptModal } from "@/components/device-instances/RfidPromptModal";
@@ -41,6 +41,7 @@ export default function InstanceHomePage() {
   const [notFound, setNotFound] = useState(false);
   const [connectors, setConnectors] = useState<ConnectorRuntimeView[] | null>(null);
   const [now, setNow] = useState(() => new Date());
+  const embedded = useEmbedded();
   const [connectionPending, setConnectionPending] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<number | null>(null);
   const [evPendingConnectorId, setEvPendingConnectorId] = useState<number | null>(null);
@@ -208,9 +209,14 @@ export default function InstanceHomePage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col gap-4 px-6 py-10">
-      <Link href="/" className="text-xs text-zinc-500 hover:underline">
-        ← All devices
-      </Link>
+      <div className="flex items-center justify-between">
+        <Link href="/" className="text-xs text-zinc-500 hover:underline">
+          ← All devices
+        </Link>
+        <Link href={`/instances/${instanceId}/twin`} className="rounded-full bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-500">
+          Open 3D twin →
+        </Link>
+      </div>
 
       <DeviceScreenFrame>
         <HomeHeaderBar
@@ -224,13 +230,13 @@ export default function InstanceHomePage() {
           onToggleConnection={handleToggleConnection}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
+        <div className="flex min-h-0 flex-1 flex-col justify-between gap-2 overflow-y-auto bg-[#f4f6f8] px-[20px] pb-[10px] pt-[14px]">
           {connectors === null ? (
             <p className="text-center text-sm text-zinc-500">Loading…</p>
           ) : instance.connectors.length === 0 ? (
             <p className="text-center text-sm text-zinc-500">This device model has no connectors configured.</p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid min-h-0 flex-1 grid-cols-2 gap-[22px]">
               {instance.connectors.map((connector) => (
                 <ConnectorChargeCard
                   key={connector.connectorId}
@@ -240,6 +246,7 @@ export default function InstanceHomePage() {
                   pending={pendingConnectorId === connector.connectorId}
                   evPending={evPendingConnectorId === connector.connectorId}
                   error={connectorErrors[connector.connectorId] || null}
+                  showEvControl={!embedded}
                   onStartCharging={() => openRfidPrompt(connector.connectorId, connector.label, connector.maxPowerKw)}
                   onStopCharging={() => handleStopCharging(connector.connectorId)}
                   onClearFault={() => handleClearFault(connector.connectorId)}
@@ -251,8 +258,8 @@ export default function InstanceHomePage() {
             </div>
           )}
 
-          <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
-            Charge Prices: <span className="font-mono">{price.toFixed(4)}</span> {currency}/kWh
+          <p className="text-center text-[26px] text-[#8a8f95]">
+            Charge Prices: <span className="mx-2 text-[34px] tabular-nums text-[#9a9fa5]">{price.toFixed(4)}</span> {currency}/kWh
           </p>
         </div>
 
