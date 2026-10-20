@@ -22,6 +22,9 @@ const url = process.env.OCPP_URL;
 const idTag = process.env.ID_TAG;
 if (!url || !idTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
 const source = process.env.SESSION_SOURCE ?? "RFID";
+const sequential=process.env.CGP_SEQUENTIAL_APP==='1';
+if(sequential&&(process.env.CGP_RFID_DENIAL_TRIGGER||process.env.CGP_RFID_DENIAL_RESULT))throw Error('Sequential and denied-RFID probes are separate fixtures');
+if(process.env.CGP_SEQUENTIAL_APP!==undefined&&(!sequential||source!=='APP'||process.env.CGP_CONNECTOR_IDS!==undefined||!process.env.SEQUENTIAL_NEXT_TRIGGER_FILE||!process.env.EVIDENCE_OUT))throw Error('Sequential fixture requires explicit APP/oneconnector/privateevidence/phase2trigger');
 const connectorId = Number(process.env.CONNECTOR_ID ?? 1);
 const connectorIds=headlessConnectors(connectorId,process.env.CGP_CONNECTOR_IDS);
 const rateKw = Number(process.env.CHARGE_RATE_KW ?? 22);
@@ -31,6 +34,10 @@ const REGISTER = "Energy.Active.Import.Register";
 
 interface Frame { at: string; dir: "->CSMS" | "<-CSMS"; action: string; payload: unknown }
 const frames: Frame[] = [];
+const connectionId=`headless-${Date.now()}-${process.pid}`;
+const sessionReports: Array<Record<string, unknown>>=[];
+let sequentialFrameStart=0;
+let commonFrames:Frame[]=[];
 const log = (dir: Frame["dir"], action: string, payload: unknown) => frames.push({ at: new Date().toISOString(), dir, action, payload });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -141,11 +148,28 @@ async function main() {
   const trigger = process.env.SWIPE_TRIGGER_FILE;
   console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
   if (source === "APP") {
-    const deadline = Date.now() + maxSeconds * 1000;
-    while (!ended && Date.now() < deadline && !unexpectedTransactions.length) {await rfidProbe.poll();await sleep(250);}
-    if(unexpectedTransactions.length)throw new Error("Unexpected physical start on secondary connector");
-    if (!tx || !ended || ended.reason !== "Remote" || !stopConfirmed) throw new Error("APP session deadline or unconfirmed remote stop");
-    rfidProbe.assertComplete();outcome = "ENDED_REMOTE";
+    const count=sequential?2:1;
+    for(let index=1;index<=count;index++){
+      const deadline = Date.now() + maxSeconds * 1000;
+      while (!ended && Date.now() < deadline && !unexpectedTransactions.length) {await rfidProbe.poll();await sleep(250);}
+      if (unexpectedTransactions.length) throw new Error('Unexpected physical start on secondary connector');
+      if (!tx || !ended || ended.reason !== 'Remote' || !stopConfirmed) throw new Error('APP session deadline or unconfirmed remote stop');
+      if(sequential){
+        if(session.getConnectorStatus(connectorId)?.status!=='Available')throw Error('Sequential connector not Available');
+        await session.triggerStatusNotification(connectorId); // A genuine acknowledged Available, never a synthetic proof.
+        const {sequentialSessions:_reports,...physical}=makeEvidence();physical.frames=[...commonFrames,...frames.slice(sequentialFrameStart)];physical.outcome='ENDED_REMOTE';
+        if(index===1){const first=physical.frames.findIndex(f=>f.action==='RemoteStartTransaction'&&f.dir==='<-CSMS');if(first<0)throw Error('First APP remote start absent');commonFrames=physical.frames.slice(0,first);}
+        sessionReports.push(physical);writeEvidence(makeEvidence());
+        console.log(JSON.stringify({event:'SEQUENTIAL_SESSION_ENDED',index,transactionId:tx.transactionId,stopConfirmed:true,availableAcknowledged:true}));
+        if(index<count){
+          const until=Date.now()+90000;while(!existsSync(process.env.SEQUENTIAL_NEXT_TRIGGER_FILE!)&&Date.now()<until)await sleep(100);
+          if(!existsSync(process.env.SEQUENTIAL_NEXT_TRIGGER_FILE!))throw Error('Sequential finalization gate not released');
+          tx=null;ended=null;stopConfirmed=false;stopFailure=null;stopTask=null;sequentialFrameStart=frames.length;
+          console.log(JSON.stringify({event:'SEQUENTIAL_READY',index:index+1,connectionId}));
+        }
+      }
+    }
+    rfidProbe.assertComplete();outcome = 'ENDED_REMOTE';
     return;
   }
   if (trigger) {
@@ -185,22 +209,30 @@ async function main() {
   outcome = `ENDED_${ended!.reason.toUpperCase()}`;
 }
 
-main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : String(e)}`; exitCode = 1; }).finally(async () => {
-  controller.dispose();
-  session.dispose();
-  client.disconnect();
+function makeEvidence() {
   const meterValues = frames.filter((f) => f.action === "MeterValues" && f.dir === "->CSMS");
   const evidence = {
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
     url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed, source,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
-    connectorIds, unexpectedTransactions, actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
+    connectionId,...(sequential?{sequentialSessions:sessionReports}:{}),connectorIds, unexpectedTransactions, actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
   };
+  return evidence;
+}
+function writeEvidence(evidence:ReturnType<typeof makeEvidence>){
   if (process.env.EVIDENCE_OUT) {
     const out = resolve(process.env.EVIDENCE_OUT);
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, JSON.stringify(evidence, null, 2) + "\n");
   }
+ }
+
+main().catch((e) => { outcome = `ERROR: ${e instanceof Error ? e.message : String(e)}`; exitCode = 1; }).finally(async () => {
+  controller.dispose();
+  session.dispose();
+  client.disconnect();
+  const evidence=makeEvidence();writeEvidence(evidence);
+  const meterValues=frames.filter(f=>f.action==='MeterValues'&&f.dir==='->CSMS');
   console.log(JSON.stringify({ outcome, transactionId: tx?.transactionId ?? null, deliveredWh: evidence.transaction?.deliveredWh ?? null, endedBy: ended?.reason ?? null, meterSamples: meterValues.length, stopConfirmed }));
   process.exit(exitCode);
 });
