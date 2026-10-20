@@ -11,7 +11,7 @@ export function confirmedAppStartDenial(
   if (starts.length !== 1) throw Error('APP_NO_START_AMBIGUOUS_RESPONSE');
   const reply = starts[0]!.payload as {idTagInfo?: {status?: string}};
   const status = reply?.idTagInfo?.status;
-  if (!status || status === 'Accepted') throw Error('APP_NO_START_DECLINE_REQUIRED');
+  if (typeof status !== 'string' || !['Blocked', 'Expired', 'Invalid', 'ConcurrentTx'].includes(status)) throw Error('APP_NO_START_DECLINE_REQUIRED');
   if (!frames.some(f => f.action === 'StartTransaction' && f.dir === '->CSMS')) {
     throw Error('APP_NO_START_REQUEST_REQUIRED');
   }
