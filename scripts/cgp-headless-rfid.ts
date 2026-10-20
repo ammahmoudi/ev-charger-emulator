@@ -74,7 +74,7 @@ const rawRegister = client.registerHandler.bind(client);
 
 const session = new OcppChargePointSession(client, { identity: { chargePointVendor: "EVYAR-EMU", chargePointModel: "cgp-headless" }, connectors: connectorIds.map(id=>({connectorId:id,label:`Plug ${id}`})) });
 session.on("error", () => {});
-const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0,
+const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0, calendarMeterBoundaryAt: process.env.CGP_METER_BOUNDARY_AT,
   onRemoteTransactionStarted: (_connector, info) => {
     if (source !== "APP") return;
     if(_connector!==connectorId){unexpectedTransactions.push({connectorId:_connector,transactionId:info.transactionId});return;}
