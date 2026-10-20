@@ -1,4 +1,5 @@
 import {confirmedAppStartDenial} from './cgp-app-start-denial';
+import {waitAppSession} from './cgp-app-session-clock';
 import {staleMeterFault} from './cgp-stale-meter';
 import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
 /**
@@ -165,9 +166,12 @@ async function main() {
     }
     const count=sequential?2:1;
     for(let index=1;index<=count;index++){
-      const deadline = Date.now() + maxSeconds * 1000;
-      while (!ended && Date.now() < deadline && !unexpectedTransactions.length) {await rfidProbe.poll();await sleep(250);}
-      if (unexpectedTransactions.length) throw new Error('Unexpected physical start on secondary connector');
+      await waitAppSession({
+        snapshot:()=>({startedAt:tx?.startedAt??null,ended:Boolean(ended),stopConfirmed,unexpected:unexpectedTransactions.length>0}),
+        pause:async ms=>{await rfidProbe.poll();await sleep(ms);},
+        idleSeconds:Number(process.env.IDLE_MAX_SECONDS??600),activeSeconds:maxSeconds,
+        onDeadline:kind=>{writeEvidence(makeEvidence());console.log(JSON.stringify({event:'APP_BUDGET_EXHAUSTED',kind,index,connectionId}));},
+      });
       if (!tx || !ended || ended.reason !== 'Remote' || !stopConfirmed) throw new Error('APP session deadline or unconfirmed remote stop');
       if(sequential){
         if(session.getConnectorStatus(connectorId)?.status!=='Available')throw Error('Sequential connector not Available');
