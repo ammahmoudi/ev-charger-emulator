@@ -1,3 +1,4 @@
+import {confirmedAppStartDenial} from './cgp-app-start-denial';
 import {staleMeterFault} from './cgp-stale-meter';
 import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
 /**
@@ -23,6 +24,8 @@ const url = process.env.OCPP_URL;
 const idTag = process.env.ID_TAG;
 if (!url || !idTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
 const source = process.env.SESSION_SOURCE ?? "RFID";
+const preadmit=process.env.CGP_APP_PRE_ADMIT_RECOVERY==='1';
+if(process.env.CGP_APP_PRE_ADMIT_RECOVERY!==undefined&&(!preadmit||source!=='APP'||process.env.CGP_SEQUENTIAL_APP!==undefined||process.env.CGP_CONNECTOR_IDS!==undefined))throw Error('exclusive single-target APP no-start fixture required');
 const sequential=process.env.CGP_SEQUENTIAL_APP==='1';
 if(sequential&&(process.env.CGP_RFID_DENIAL_TRIGGER||process.env.CGP_RFID_DENIAL_RESULT))throw Error('Sequential and denied-RFID probes are separate fixtures');
 if(process.env.CGP_SEQUENTIAL_APP!==undefined&&(!sequential||source!=='APP'||process.env.CGP_CONNECTOR_IDS!==undefined||!process.env.SEQUENTIAL_NEXT_TRIGGER_FILE||!process.env.EVIDENCE_OUT))throw Error('Sequential fixture requires explicit APP/oneconnector/privateevidence/phase2trigger');
@@ -153,6 +156,13 @@ async function main() {
   const trigger = process.env.SWIPE_TRIGGER_FILE;
   console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
   if (source === "APP") {
+    if (preadmit) {
+      const deadline=Date.now()+Math.min(maxSeconds,60)*1000;
+      let denied: string|null=null;
+      while(Date.now()<deadline&&!denied){denied=confirmedAppStartDenial(frames,Boolean(tx));if(!denied)await sleep(100);}
+      if(!denied)throw Error('APP_NO_START_DECLINE_NOT_OBSERVED');
+      outcome=`START_${denied}`;exitCode=3;return;
+    }
     const count=sequential?2:1;
     for(let index=1;index<=count;index++){
       const deadline = Date.now() + maxSeconds * 1000;
