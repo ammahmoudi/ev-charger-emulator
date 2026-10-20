@@ -1,3 +1,4 @@
+import {staleMeterFault} from './cgp-stale-meter';
 import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
 /**
  * Headless RFID session over the emulator's REAL OCPP 1.6J protocol engine (no Next.js, no database).
@@ -38,18 +39,22 @@ const connectionId=`headless-${Date.now()}-${process.pid}`;
 const sessionReports: Array<Record<string, unknown>>=[];
 let sequentialFrameStart=0;
 let commonFrames:Frame[]=[];
-const log = (dir: Frame["dir"], action: string, payload: unknown) => frames.push({ at: new Date().toISOString(), dir, action, payload });
+const log = (dir: Frame["dir"], action: string, payload: unknown,at=new Date().toISOString()) => frames.push({ at, dir, action, payload });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const config = new InMemoryConfigurationStore();
 const client = new OcppClient({ url, reconnect: { enabled: false }, callTimeoutMs: Number(process.env.OCPP_CALL_TIMEOUT_MS ?? 30_000) });
 
 // Record every request this charge point sends and every CSMS call it answers.
+const staleFault=staleMeterFault(process.env);
 const rawCall = client.call.bind(client);
 (client as unknown as { call: typeof client.call }).call = (async (action: string, payload: Record<string, unknown>) => {
-  log("->CSMS", action, payload);
+  const sentAt=new Date().toISOString();
+  if(staleFault?.beforeSend(action,payload,sentAt))throw Error('CGP_DEVICE_PERIODIC_TELEMETRY_SUPPRESSED');
+  log("->CSMS", action, payload,sentAt);
   if (source === "APP" && action === "StopTransaction" && Number(payload.transactionId)===tx?.transactionId) registerWh = Number(payload.meterStop);
   const response = await rawCall(action, payload);
+  staleFault?.confirmed(action,payload);
   if (source === "APP" && action === "StopTransaction" && Number(payload.transactionId)===tx?.transactionId) stopConfirmed = true;
   log("<-CSMS", `${action}.conf`, response);
   return response;
@@ -215,7 +220,7 @@ function makeEvidence() {
     subject: "EV charger emulator protocol engine, headless (no Next.js); OCPP 1.6J over a real WebSocket to a real CSMS; NOT a physical charger",
     url: url.replace(/\/\/[^/@]*@/, "//"), idTagHash: idTag.length, connectorId, rateKw, outcome, stopConfirmed, source,
     transaction: tx ? { ...tx, endedBy: ended?.reason ?? null, deliveredWh: ended ? Math.round(registerWh) - tx.meterStart : null } : null,
-    connectionId,...(sequential?{sequentialSessions:sessionReports}:{}),connectorIds, unexpectedTransactions, actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
+    connectionId,...(staleFault?{staleMeterFault:staleFault.evidence}:{}),...(sequential?{sequentialSessions:sessionReports}:{}),connectorIds, unexpectedTransactions, actualMeterIntervalSeconds, meterSamples: meterValues.length, frames,
   };
   return evidence;
 }
