@@ -1,3 +1,4 @@
+import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
 /**
  * Headless RFID session over the emulator's REAL OCPP 1.6J protocol engine (no Next.js, no database).
  *
@@ -78,6 +79,7 @@ let lastTick = 0;
 let stopConfirmed = false;
 let stopFailure: unknown = null;
 let stopTask: Promise<void> | null = null;
+const rfidProbe=createRfidDenialProbe({triggerPath:process.env.CGP_RFID_DENIAL_TRIGGER,resultPath:process.env.CGP_RFID_DENIAL_RESULT,firstConnectorId:connectorId,connectorIds,call:(action,payload)=>client.call(action,payload),isActive:()=>Boolean(tx&&!ended)});
 
 const sample = () => {
   const now = Date.now();
@@ -140,10 +142,10 @@ async function main() {
   console.log(JSON.stringify({ event: "READY", connected: true, trigger: trigger ?? null }));
   if (source === "APP") {
     const deadline = Date.now() + maxSeconds * 1000;
-    while (!ended && Date.now() < deadline && !unexpectedTransactions.length) await sleep(250);
+    while (!ended && Date.now() < deadline && !unexpectedTransactions.length) {await rfidProbe.poll();await sleep(250);}
     if(unexpectedTransactions.length)throw new Error("Unexpected physical start on secondary connector");
     if (!tx || !ended || ended.reason !== "Remote" || !stopConfirmed) throw new Error("APP session deadline or unconfirmed remote stop");
-    outcome = "ENDED_REMOTE";
+    rfidProbe.assertComplete();outcome = "ENDED_REMOTE";
     return;
   }
   if (trigger) {
