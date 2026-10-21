@@ -68,6 +68,7 @@ export function registerRemoteCommandHandlers(
   const onError = deps.onError ?? (() => {});
 
   const activeTransactions = new Map<number, OcppActiveTransaction>();
+  const pendingStarts = new Set<number>();
   /** Per-connector cumulative energy register (Wh), persisted across transactions for this process's lifetime. */
   const meterRegisterWh = new Map<number, number>();
   const transactionSimState = new Map<number, TransactionSimState>();
@@ -90,7 +91,7 @@ export function registerRemoteCommandHandlers(
   function findAvailableConnectorId(): number | undefined {
     return session
       .listConnectorStatuses()
-      .find((info) => info.status === "Available" && !activeTransactions.has(info.connectorId))?.connectorId;
+      .find((info) => (info.status === "Available" || (deps.prepareStart && info.status === "Preparing")) && !pendingStarts.has(info.connectorId) && !activeTransactions.has(info.connectorId))?.connectorId;
   }
 
   async function getRatedPowerKw(): Promise<number> {
@@ -334,6 +335,7 @@ export function registerRemoteCommandHandlers(
 
   async function startTransaction(connectorId: number, idTag: string): Promise<void> {
     try {
+      if (deps.prepareStart && !(await deps.prepareStart(connectorId, idTag))) return;
       session.setConnectorStatus(connectorId, "Preparing");
       const meterStartWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
       const response = await client.call("StartTransaction", {
@@ -382,6 +384,10 @@ export function registerRemoteCommandHandlers(
     } catch (err) {
       session.setConnectorStatus(connectorId, "Available");
       onError(toError(err));
+    } finally {
+      if (!activeTransactions.has(connectorId)) {
+        await deps.cancelStart?.(connectorId).catch((err) => onError(toError(err)));
+      }
     }
   }
 
@@ -400,14 +406,14 @@ export function registerRemoteCommandHandlers(
     }
 
     const info = session.getConnectorStatus(connectorId);
-    if (!info || activeTransactions.has(connectorId)) {
+    if (!info || pendingStarts.has(connectorId) || activeTransactions.has(connectorId)) {
       return { status: "Rejected" };
     }
     if (info.status === "Reserved") {
       if (!(await reservationHandlers.consumeReservation(connectorId, idTag))) {
         return { status: "Rejected" };
       }
-    } else if (info.status !== "Available") {
+    } else if (info.status !== "Available" && !(deps.prepareStart && info.status === "Preparing")) {
       return { status: "Rejected" };
     }
 
@@ -417,7 +423,10 @@ export function registerRemoteCommandHandlers(
 
     // Deferred to a macrotask so the RemoteStartTransaction.conf is always sent before
     // any follow-up StatusNotification/StartTransaction messages it triggers.
-    setImmediate(() => void startTransaction(connectorId, idTag));
+    pendingStarts.add(connectorId);
+    setImmediate(() => {
+      void startTransaction(connectorId, idTag).finally(() => pendingStarts.delete(connectorId));
+    });
     return { status: "Accepted" };
   }
 
@@ -480,7 +489,7 @@ export function registerRemoteCommandHandlers(
     }
   }
 
-  function handleRemoteStopTransaction(payload: Record<string, unknown>): { status: "Accepted" | "Rejected" } {
+  async function handleRemoteStopTransaction(payload: Record<string, unknown>): Promise<{ status: "Accepted" | "Rejected" }> {
     const transactionId = payload.transactionId;
     if (typeof transactionId !== "number") {
       throw new OcppCallError("PropertyConstraintViolation", "transactionId is required");
@@ -488,7 +497,7 @@ export function registerRemoteCommandHandlers(
 
     const entry = Array.from(activeTransactions.values()).find((t) => t.transactionId === transactionId);
     if (!entry) {
-      return { status: "Rejected" };
+      return { status: deps.requestStop && await deps.requestStop(transactionId) ? "Accepted" : "Rejected" };
     }
 
     setImmediate(() => void stopTransaction(entry, "Remote"));
@@ -507,6 +516,8 @@ export function registerRemoteCommandHandlers(
 
   async function performReset(type: "Hard" | "Soft"): Promise<void> {
     const reason = type === "Hard" ? "HardReset" : "SoftReset";
+    for (const connectorId of pendingStarts) await deps.cancelStart?.(connectorId);
+    pendingStarts.clear();
     for (const entry of Array.from(activeTransactions.values())) {
       await stopTransaction(entry, reason);
     }
@@ -707,6 +718,10 @@ export function registerRemoteCommandHandlers(
     getLocalAuthListVersion: () => localAuthListHandlers.getVersion(),
     listLocalAuthListEntries: () => localAuthListHandlers.listEntries(),
     dispose(): void {
+      for (const connectorId of pendingStarts) {
+        void deps.cancelStart?.(connectorId).catch((err) => onError(toError(err)));
+      }
+      pendingStarts.clear();
       client.unregisterHandler("RemoteStartTransaction");
       client.unregisterHandler("RemoteStopTransaction");
       client.unregisterHandler("UnlockConnector");

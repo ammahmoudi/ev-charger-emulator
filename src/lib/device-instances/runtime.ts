@@ -1,6 +1,6 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
-import { adoptRemoteSession, stopChargingSession } from "@/lib/device-instances/connector-sessions";
+import { adoptRemoteSession, cancelRemotePreparation, prepareRemoteStart, stopChargingSession } from "@/lib/device-instances/connector-sessions";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { drainOutbox } from "@/lib/device-instances/outbox";
 import { PrismaChargingProfileStore } from "@/lib/device-instances/prisma-charging-profile-store";
@@ -85,6 +85,18 @@ function createEntry(instance: InstanceWithConnectors, firmwareVersion: string |
 
   const remoteCommands = registerRemoteCommandHandlers(client, session, {
     configStore: new PrismaConfigurationStore(instance.id),
+    prepareStart: (connectorId, idTag) => prepareRemoteStart(instance.id, connectorId, idTag),
+    cancelStart: (connectorId) => cancelRemotePreparation(instance.id, connectorId),
+    requestStop: async (transactionId) => {
+      const state = await prisma.deviceInstanceConnectorState.findFirst({
+        where: { deviceInstanceId: instance.id, activeTransactionId: transactionId, status: "Charging" },
+      });
+      if (!state) return false;
+      setImmediate(() => {
+        void stopChargingSession(instance.id, state.connectorId, { stopCause: "Remote" }).catch(console.error);
+      });
+      return true;
+    },
     // Prisma-backed stores for ReserveNow/CancelReservation, SetChargingProfile/
     // ClearChargingProfile, and SendLocalList/GetLocalListVersion state, so each survives a
     // restart instead of falling back to src/lib/ocpp's in-memory-only defaults (round 2's job
