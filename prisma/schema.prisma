@@ -458,6 +458,7 @@ model DeviceInstanceConnectorState {
   /// `connector-sessions.ts`'s `connectEv`/`disconnectEv`. Unplugging mid-session force-stops it
   /// with `stopCause: "EV Disconnected"`, a value `stop-causes.ts` already reserved for this.
   evConnected Boolean @default(false)
+  preparingSince DateTime?
 
   activeIdTag         String?
   activeTransactionId Int?

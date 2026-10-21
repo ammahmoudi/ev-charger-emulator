@@ -43,7 +43,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
     await connectEv(instanceId, 1);
 
     const view = await presentRfidCard(instanceId, 1, "MASTER-1", 20);
-    expect(view.status).toBe("Preparing");
+    expect(view.status).toBe("Charging");
   });
 
   it("authorizes a local-auth-list idTag locally, even while disconnected", async () => {
@@ -54,7 +54,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
     await upsertLocalAuthEntry(instanceId, "LOCAL-CARD", "ACCEPTED");
 
     const view = await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20);
-    expect(view.status).toBe("Preparing");
+    expect(view.status).toBe("Charging");
   });
 
   it("rejects an unknown idTag while disconnected", async () => {
@@ -78,6 +78,8 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
 
       // First frame is the automatic BootNotification (session.ts) — irrelevant here, left unanswered.
       await queue.next();
+
+      await connectEv(instanceId, 1);
 
       // presentRfidCard blocks on the Authorize/StartTransaction round-trip below, so it must be
       // kicked off (not awaited yet) before awaiting the frames it sends.

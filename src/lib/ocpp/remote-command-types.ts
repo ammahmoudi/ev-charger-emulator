@@ -134,6 +134,12 @@ export interface OcppLocalAuthListStore {
 }
 
 export interface RemoteCommandHandlersDeps {
+  /** Delegate the physical EV/authorization handshake to the device runtime. */
+  prepareStart?: (connectorId: number, idTag: string) => Promise<boolean>;
+  cancelStart?: (connectorId: number) => Promise<void>;
+  /** Stop a persisted transaction, including locally authorized transactions. */
+  requestStop?: (transactionId: number) => Promise<boolean>;
+
   /** Backing store for `GetConfiguration`/`ChangeConfiguration`. Default: a small in-memory store. */
   configStore?: OcppConfigurationStore;
   /** Delay before reconnecting after a `Reset`, to simulate a reboot cycle, in ms. Default: 500. */

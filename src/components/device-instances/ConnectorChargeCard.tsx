@@ -120,9 +120,13 @@ export function ConnectorChargeCard({
   const isCharging = status === "Charging" && session !== null;
   const isFaulted = status === "Faulted";
 
-  const idleText = evConnected
-    ? "EV connected — click Charging to start."
-    : "Please connect the EV or click charging button.";
+  const idleText = status === "Finishing"
+    ? "Finishing charge…"
+    : evConnected
+      ? status === "Preparing"
+        ? "Preparing — present a card or start charging within 60 seconds."
+        : "EV connected — click Charging to start."
+      : "Please connect the EV or click charging button.";
   const charging = "w-full rounded-[6px] py-[10px] text-[34px] font-semibold leading-none text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.12)] disabled:cursor-not-allowed";
 
   return (
@@ -134,7 +138,7 @@ export function ConnectorChargeCard({
         className={`mx-auto mt-[2px] h-[168px] w-[134px] ${
           isCharging
             ? "text-emerald-500"
-            : isPreparing
+            : status === "Preparing"
               ? "text-amber-500 animate-pulse"
               : isFaulted
                 ? "text-red-400"
@@ -147,7 +151,7 @@ export function ConnectorChargeCard({
       <div className="mt-[18px] flex min-h-[78px] flex-col items-center justify-center text-center text-[24px] leading-[30px] text-[#222]">
         {isPreparing && session ? (
           <>
-            <p className="font-medium text-amber-600">Preparing — authorizing card {session.idTag}…</p>
+            <p className="font-medium text-amber-600">Preparing — {evConnected ? "starting charge…" : "connect the EV within 60 seconds."}</p>
             <p className="font-mono text-[20px] text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
           </>
         ) : isCharging && session ? (
@@ -184,10 +188,7 @@ export function ConnectorChargeCard({
         ) : (
           <button
             type="button"
-            // A connected EV with no session yet is always "Preparing" (see connector-sessions.ts's
-            // connectEv) — "Available" itself means no EV at all. The reference screen keeps the
-            // button full-colour regardless; it just does nothing until an EV is present.
-            disabled={pending || !evConnected || status !== "Preparing" || session !== null}
+            disabled={pending || !["Available", "Preparing"].includes(status) || session !== null}
             onClick={onStartCharging}
             className={`${charging} disabled:opacity-100`}
             style={{ background: "linear-gradient(#3fd04f, #2fb83f)" }}
