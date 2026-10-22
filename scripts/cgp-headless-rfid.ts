@@ -11,7 +11,7 @@ import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
  * RemoteStopTransaction from the CSMS side (the adapter's watchdog) stops it for real. Nothing here pretends a result:
  * every frame is recorded with a local timestamp and written to the evidence file.
  *
- * Env: OCPP_URL (ws://host:8081/<stationId>), ID_TAG, CONNECTOR_ID=1, CHARGE_RATE_KW=22, METER_INTERVAL_S=2,
+ * Env: OCPP_URL (wss://csms.example.invalid/<stationId>), ID_TAG, CONNECTOR_ID=1, CHARGE_RATE_KW=22, METER_INTERVAL_S=2,
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
  * Exit: 0 confirmed remote stop; local stop/max time fail; 1 error; 3 start refused by the CSMS.
  */
