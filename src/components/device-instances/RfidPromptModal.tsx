@@ -11,6 +11,7 @@ import { useState } from "react";
  */
 export function RfidPromptModal({
   connectorLabel,
+  vehicleId = false,
   masterCardIdTag,
   pending,
   error,
@@ -18,14 +19,15 @@ export function RfidPromptModal({
   onCancel,
 }: {
   connectorLabel: string;
+  vehicleId?: boolean;
   masterCardIdTag: string | null;
   pending: boolean;
   error: string | null;
   onConfirm: (idTag: string) => void;
   onCancel: () => void;
 }) {
-  const [idTag, setIdTag] = useState(masterCardIdTag ?? "");
-  const isMasterCard = masterCardIdTag !== null && idTag === masterCardIdTag;
+  const [idTag, setIdTag] = useState(vehicleId ? "" : masterCardIdTag ?? "");
+  const isMasterCard = !vehicleId && masterCardIdTag !== null && idTag === masterCardIdTag;
 
   return (
     <div
@@ -38,14 +40,17 @@ export function RfidPromptModal({
         <div className="flex flex-col items-center gap-2 border-b border-zinc-200 px-6 py-6 dark:border-zinc-800">
           <span className="text-3xl">💳</span>
           <p id="rfid-prompt-title" className="text-lg font-medium text-zinc-700 dark:text-zinc-200">
-            Present card — {connectorLabel}
+            {vehicleId ? "EV ID" : "Present card"} — {connectorLabel}
           </p>
         </div>
 
         <div className="flex flex-col gap-3 px-6 py-4 text-sm">
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Card idTag</label>
+            <label htmlFor="charging-identity" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{vehicleId ? "Vehicle ID" : "Card idTag"}</label>
             <input
+              id="charging-identity"
+              dir="ltr"
+              maxLength={20}
               autoFocus
               value={idTag}
               onChange={(e) => setIdTag(e.target.value)}
@@ -53,7 +58,7 @@ export function RfidPromptModal({
             />
           </div>
           <p className="text-xs text-zinc-500">
-            {isMasterCard
+            {vehicleId ? "Enter the connected vehicle’s registered EV ID to authorize charging." : isMasterCard
               ? "Master card — starts a session locally, works even without a CSMS connection."
               : "Not the master card — requires the instance to be connected to a CSMS, which will Authorize/StartTransaction this card for real."}
           </p>
@@ -75,7 +80,7 @@ export function RfidPromptModal({
             disabled={pending || !idTag.trim()}
             className="flex-1 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
           >
-            {pending ? "Presenting…" : "Present card"}
+            {pending ? "Authorizing…" : vehicleId ? "Start autocharge" : "Present card"}
           </button>
         </div>
       </div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { DeviceHeaderChrome, LCD_FONT, SignalGlyph } from "../DeviceHeaderChrome";
+import { ComputerGlyph, DeviceHeaderChrome, LCD_FONT, SignalGlyph } from "../DeviceHeaderChrome";
 
 const serialCache = new Map<string, string>();
 
@@ -15,7 +15,7 @@ function pad(n: number) {
  * strip: "Hi" logo, white home tab, live clock and the signal glyph (the Home and status screens also
  * show `SN:`). `title` is only kept as an accessible/hover label.
  */
-export function DeviceHeaderBar({ instanceId, title, showSerial = false }: { instanceId: string; title: string; showSerial?: boolean }) {
+export function DeviceHeaderBar({ instanceId, title, showSerial = false, computerIndicator = false }: { instanceId: string; title: string; showSerial?: boolean; computerIndicator?: boolean }) {
   const [now, setNow] = useState(() => new Date());
   const [serial, setSerial] = useState<string | null>(serialCache.get(instanceId) ?? null);
 
@@ -43,7 +43,7 @@ export function DeviceHeaderBar({ instanceId, title, showSerial = false }: { ins
   }, [instanceId, showSerial]);
 
   return (
-    <DeviceHeaderChrome instanceId={instanceId} homeTitle="Back to device" right={<SignalGlyph />}>
+    <DeviceHeaderChrome instanceId={instanceId} homeTitle="Back to device" right={computerIndicator ? <ComputerGlyph /> : <SignalGlyph />}>
       <span className="sr-only">{title}</span>
       {showSerial && serial ? (
         <span className="text-[32px] font-semibold tracking-wide" style={{ fontFamily: LCD_FONT }}>{`SN: ${serial}`}</span>

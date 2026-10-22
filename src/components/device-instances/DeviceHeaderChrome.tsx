@@ -23,6 +23,14 @@ export function SignalGlyph({ online = false }: { online?: boolean }) {
   );
 }
 
+/** Computer connection indicator visible in the newer field photographs. */
+export function ComputerGlyph() {
+  return <svg aria-label="Connection indicator" viewBox="0 0 44 36" className="h-[38px] w-[46px] text-white" fill="none" stroke="currentColor" strokeWidth="2.5">
+    <rect x="5" y="3" width="34" height="23" rx="3" />
+    <path d="M2 31h40M17 27v4M27 27v4M19 7h6" />
+  </svg>;
+}
+
 function HomeGlyph({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="currentColor">
@@ -53,6 +61,7 @@ export function DeviceHeaderChrome({
   onLogoClick,
   homeHref,
   homeTitle = "Home",
+  onHomeClick,
   right,
   children,
 }: {
@@ -61,6 +70,7 @@ export function DeviceHeaderChrome({
   onLogoClick?: () => void;
   homeHref?: string;
   homeTitle?: string;
+  onHomeClick?: () => void;
   right?: ReactNode;
   children?: ReactNode;
 }) {
@@ -71,6 +81,7 @@ export function DeviceHeaderChrome({
       </div>
       <Link
         href={homeHref ?? `/instances/${instanceId}`}
+        onClick={onHomeClick}
         title={homeTitle}
         aria-label={homeTitle}
         className="absolute bottom-0 left-[116px] flex h-[62px] w-[100px] items-center justify-center rounded-t-[16px] bg-[#f4f6f8]"
