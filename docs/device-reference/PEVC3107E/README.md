@@ -25,9 +25,24 @@ The device has two separate navigation surfaces that are easy to conflate:
 | [07-settings-system-p2.png](screenshots/07-settings-system-p2.png) | Setting → **System** tab, page 2 (manufacturer, security, sensors) — *not* the Other tab, despite earlier naming |
 | [08-settings-system-p3.png](screenshots/08-settings-system-p3.png) | Setting → **System** tab, page 3 (contactor, distribution, currency) |
 
+## Additional field photographs
+
+The user supplied two distinct field photographs (three attachments, with Image 3 duplicating
+Image 1). Originals, provenance, observed values, and implementation boundaries are recorded
+in [field-photo-notes.md](field-photo-notes.md).
+
+| Screenshot | Screen |
+| --- | --- |
+| [09-charge-method-fa.png](screenshots/09-charge-method-fa.png) | Persian charging-method selection: card, QR, EV ID/autocharge, a countdown, and tariff footer |
+| [10-settings-device-field.png](screenshots/10-settings-device-field.png) | Setting → Device: six identity/board rows on the left, four plug firmware/date rows on the right |
+
+The charging-method selector is reached from a connector's Charging button. The Device tab
+uses the newer field photo for its column grouping; operator-only edits sit below the emulated
+screen. Captured firmware values and serials remain references, never instance defaults.
+
 ## Additional screens (`manual-pages/`, raw filenames from the maintenance manual)
 
-These fill in screens the curated 8 didn't cover. A handful of files in `manual-pages/` are
+These fill in screens the curated captures did not cover. A handful of files in `manual-pages/` are
 hardware photos/wiring diagrams, not UI (e.g. `Page34_Image4.jpg`, `Page35_Image2.jpg`) — not
 useful for the emulator's UI, kept only because "all images" were requested.
 

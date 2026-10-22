@@ -11,19 +11,8 @@ import type { DeviceInstanceDetail } from "@/lib/device-instances/types";
 
 const QR_PARAMETER_KEYS = ["qrCodeUrl1", "qrCodeUrl2"] as const;
 
-/**
- * QR-code overlay reached from Home's header icon. Renders one QR code per non-empty
- * `qrCodeUrl1`/`qrCodeUrl2` instance parameter — the same two config keys a real CSMS can set
- * remotely via `ChangeConfiguration` (both are ordinary `DeviceModelParameter` rows, so
- * `PrismaConfigurationStore` reads/writes them like any other key), or an operator can set from
- * Settings > Other. `qrCodeUrl1`/`qrCodeUrl2` correspond 1:1, in order, to the model's connectors
- * (matching every other per-plug numbering in this app — `connectors.ts`'s
- * `orderModelConnectors`) — labeled here by that connector's own `label` (e.g. "Plug A"/"Plug B")
- * instead of a bare "1"/"2", so it's unambiguous which EVSE each code is for. Note: unlike every
- * other screen in this app, no real device screenshot or manual page exists for this one (see
- * docs/device-reference/PEVC3107E/README.md), so this layout (including using the same
- * DeviceScreenFrame/DeviceHeaderBar chrome as every other screen, for consistency) is a
- * reasonable design, not a verified match to the real device.
+/** QR destination reached from the photographed charging-method selector.
+ * The photograph documents the selector, not the QR detail screen itself.
  */
 export default function QrCodePage() {
   const params = useParams<{ id: string }>();
@@ -109,15 +98,11 @@ export default function QrCodePage() {
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-950">
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-semibold text-black dark:text-zinc-50">QR code</h1>
-            <p className="text-sm text-zinc-500">
-              Set from Settings &gt; Other (<code className="font-mono text-xs">qrCodeUrl1</code>/
-              <code className="font-mono text-xs">qrCodeUrl2</code>), or remotely by the CSMS via
-              <code className="font-mono text-xs"> ChangeConfiguration</code>.
-            </p>
+            <p className="text-sm text-zinc-500">Scan the code for your connector to continue on your phone.</p>
           </div>
 
           {configuredKeys.length === 0 ? (
-            <p className="text-sm text-zinc-500">No QR codes configured for this instance yet.</p>
+            <p className="text-sm text-zinc-500">No charging QR code is available for this station.</p>
           ) : (
             <div className="flex flex-wrap gap-6">
               {configuredKeys.map((key) => {

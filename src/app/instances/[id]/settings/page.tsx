@@ -9,11 +9,12 @@ import { renderParameterControl } from "@/components/device-instances/ParameterF
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
 import { BlueButton } from "@/components/device-instances/DeviceScreenParts";
 import { DeviceScreenFrame } from "@/components/device-instances/DeviceScreenFrame";
+import { DeviceIdentityPanel } from "@/components/device-instances/settings/DeviceIdentityPanel";
 import { DeviceHeaderBar } from "@/components/device-instances/settings/DeviceHeaderBar";
 import { compactControlClassName, SettingsFieldRow } from "@/components/device-instances/settings/SettingsFieldRow";
 import { SettingsPager } from "@/components/device-instances/settings/SettingsPager";
 import { SettingsTabs } from "@/components/device-instances/settings/SettingsTabs";
-import { formatFirmwareDate, paginateBySortOrder, splitIntoColumns } from "@/lib/device-instances/settings-pages";
+import { paginateBySortOrder, splitIntoColumns } from "@/lib/device-instances/settings-pages";
 import { PARAMETER_CATEGORY_ORDER, type DeviceInstanceDetail, type DeviceInstanceParameterView } from "@/lib/device-instances/types";
 
 /**
@@ -141,22 +142,12 @@ export default function InstanceSettingsPage() {
       </Link>
 
       <DeviceScreenFrame>
-        <DeviceHeaderBar instanceId={instanceId} title={instance.name} showSerial />
+        <DeviceHeaderBar instanceId={instanceId} title={instance.name} computerIndicator />
         <div className="flex min-h-0 flex-1 flex-col bg-[#e9eef4] p-[14px] pt-[8px]">
           <SettingsTabs active={activeTab} onSelect={selectTab} />
           <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto rounded-[8px] bg-white px-[18px] pt-[12px] shadow-[0_1px_3px_rgba(0,0,0,0.12)]">
             {activeTab === "DEVICE" ? (
-              <DeviceTabContent
-                instance={instance}
-                parameters={activeParameters}
-                name={name}
-                chargePointId={chargePointId}
-                masterCardIdTag={masterCardIdTag}
-                fieldErrors={fieldErrors}
-                onNameChange={setName}
-                onChargePointIdChange={setChargePointId}
-                onMasterCardIdTagChange={setMasterCardIdTag}
-              />
+              <DeviceIdentityPanel instance={instance} parameters={activeParameters} />
             ) : (
               <>
                 <ParameterPage
@@ -171,95 +162,35 @@ export default function InstanceSettingsPage() {
               </>
             )}
             {error ? <p className="py-1 text-center text-[20px] text-[#e5302b]">{error}</p> : null}
-            <div className="sticky bottom-0 mt-auto flex flex-none justify-center bg-white pb-[10px] pt-[8px]">
+            {activeTab !== "DEVICE" ? <div className="sticky bottom-0 mt-auto flex flex-none justify-center bg-white pb-[10px] pt-[8px]">
               <BlueButton disabled={saving} onClick={handleSave}>
                 {saving ? "Saving…" : "Save"}
               </BlueButton>
-            </div>
+            </div> : null}
           </div>
         </div>
 
         <DeviceBottomNav instanceId={instanceId} active="Setting" />
       </DeviceScreenFrame>
-    </div>
-  );
-}
 
-function DeviceTabContent({
-  instance,
-  parameters,
-  name,
-  chargePointId,
-  masterCardIdTag,
-  fieldErrors,
-  onNameChange,
-  onChargePointIdChange,
-  onMasterCardIdTagChange,
-}: {
-  instance: DeviceInstanceDetail;
-  parameters: DeviceInstanceParameterView[];
-  name: string;
-  chargePointId: string;
-  masterCardIdTag: string;
-  fieldErrors: Record<string, string>;
-  onNameChange: (value: string) => void;
-  onChargePointIdChange: (value: string) => void;
-  onMasterCardIdTagChange: (value: string) => void;
-}) {
-  const byKey = new Map(parameters.map((p) => [p.key, p]));
-  const readOnlyRows = [
-    { label: "Model", value: `${instance.deviceModel.manufacturer} ${instance.deviceModel.model}` },
-    { label: "Firmware", value: byKey.get("firmwareVersion")?.value ?? "—" },
-    { label: "UI", value: byKey.get("uiVersion")?.value ?? "—" },
-    { label: "CRC", value: byKey.get("crc")?.value ?? "—" },
-    { label: "Date", value: formatFirmwareDate(byKey.get("firmwareVersion")) },
-    { label: "Plug A Firmware", value: byKey.get("plugAFirmwareVersion")?.value ?? "—" },
-    { label: "Plug A Date", value: formatFirmwareDate(byKey.get("plugAFirmwareVersion")) },
-    { label: "Plug B Firmware", value: byKey.get("plugBFirmwareVersion")?.value ?? "—" },
-    { label: "Plug B Date", value: formatFirmwareDate(byKey.get("plugBFirmwareVersion")) },
-  ];
-  const [left, right] = splitIntoColumns(readOnlyRows);
-
-  return (
-    <div className="grid grid-cols-2 gap-x-[14px]">
-      <div className="flex flex-col">
-        <SettingsFieldRow label="Name" error={fieldErrors.name}>
-          <input
-            required
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            className={compactControlClassName}
-          />
-        </SettingsFieldRow>
-        <SettingsFieldRow label="SN" error={fieldErrors.chargePointId}>
-          <input
-            required
-            value={chargePointId}
-            onChange={(e) => onChargePointIdChange(e.target.value)}
-            className={`${compactControlClassName} font-mono`}
-          />
-        </SettingsFieldRow>
-        <SettingsFieldRow label="Master card idTag" error={fieldErrors.masterCardIdTag}>
-          <input
-            value={masterCardIdTag}
-            onChange={(e) => onMasterCardIdTagChange(e.target.value)}
-            placeholder="e.g. MASTER-A1B2C3"
-            className={`${compactControlClassName} font-mono`}
-          />
-        </SettingsFieldRow>
-        {left.map((row) => (
-          <SettingsFieldRow key={row.label} label={row.label}>
-            <span>{row.value}</span>
-          </SettingsFieldRow>
-        ))}
-      </div>
-      <div className="flex flex-col">
-        {right.map((row) => (
-          <SettingsFieldRow key={row.label} label={row.label}>
-            <span>{row.value}</span>
-          </SettingsFieldRow>
-        ))}
-      </div>
+      <details className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <summary className="cursor-pointer font-medium">Emulator configuration</summary>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {[
+            { label: "Name", value: name, change: setName, key: "name" },
+            { label: "Charge point ID", value: chargePointId, change: setChargePointId, key: "chargePointId" },
+            { label: "Master card idTag", value: masterCardIdTag, change: setMasterCardIdTag, key: "masterCardIdTag" },
+          ].map((field) => <label key={field.key} className="flex flex-col gap-1 text-sm">
+            {field.label}
+            <input value={field.value} onChange={(event) => field.change(event.target.value)}
+              className="rounded border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700" />
+            {fieldErrors[field.key] ? <span className="text-red-600">{fieldErrors[field.key]}</span> : null}
+          </label>)}
+        </div>
+        <button type="button" disabled={saving} onClick={handleSave} className="mt-4 rounded bg-sky-600 px-4 py-2 text-sm text-white disabled:opacity-50">
+          {saving ? "Saving…" : "Save configuration"}
+        </button>
+      </details>
     </div>
   );
 }
