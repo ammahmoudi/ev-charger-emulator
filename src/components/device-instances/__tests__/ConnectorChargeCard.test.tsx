@@ -17,7 +17,7 @@ function noop() {}
 afterEach(cleanup);
 
 describe("ConnectorChargeCard", () => {
-  it("Available with no EV connected: shows the idle prompt and a disabled Charging button", () => {
+  it("Available with no EV connected: shows the idle prompt and allows authorization before plugging in", () => {
     const onStartCharging = vi.fn();
     render(
       <ConnectorChargeCard
@@ -33,7 +33,7 @@ describe("ConnectorChargeCard", () => {
     );
 
     expect(screen.getByText("Please connect the EV or click charging button.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Charging" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Charging" })).toBeEnabled();
   });
 
   it("Preparing with an EV connected and no card presented yet: shows the ready prompt and an enabled Charging button", () => {
@@ -51,11 +51,23 @@ describe("ConnectorChargeCard", () => {
       />,
     );
 
-    expect(screen.getByText("EV connected — click Charging to start.")).toBeInTheDocument();
+    expect(screen.getByText("Preparing — present a card or start charging within 60 seconds.")).toBeInTheDocument();
     const chargingButton = screen.getByRole("button", { name: "Charging" });
     expect(chargingButton).toBeEnabled();
     fireEvent.click(chargingButton);
     expect(onStartCharging).toHaveBeenCalledOnce();
+  });
+
+  it("card-first Preparing asks for the EV and allows cancellation", () => {
+    const onStopCharging = vi.fn();
+    render(<ConnectorChargeCard connector={connector}
+      runtime={{ status: "Preparing", locked: true, evConnected: false, activeSession: {
+        idTag: "CARD", startedAt: now.toISOString(), chargeRateKw: 20, currentEnergyWh: 0,
+      } }} now={now} pending={false} error={null} onStartCharging={noop}
+      onStopCharging={onStopCharging} onClearFault={noop} />);
+    expect(screen.getByText(/connect the EV within 60 seconds/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onStopCharging).toHaveBeenCalledOnce();
   });
 
   it("Charging with an active session: shows the card idTag, live energy, and a Stop button", () => {
@@ -94,7 +106,7 @@ describe("ConnectorChargeCard", () => {
     expect(onStopCharging).toHaveBeenCalledOnce();
   });
 
-  it("Finishing (no active session yet): shows the idle prompt with the Charging button disabled", () => {
+  it("Finishing (no active session yet): shows the finishing prompt with the Charging button disabled", () => {
     render(
       <ConnectorChargeCard
         connector={connector}
@@ -108,7 +120,7 @@ describe("ConnectorChargeCard", () => {
       />,
     );
 
-    expect(screen.getByText("EV connected — click Charging to start.")).toBeInTheDocument();
+    expect(screen.getByText("Finishing charge…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Charging" })).toBeDisabled();
   });
 

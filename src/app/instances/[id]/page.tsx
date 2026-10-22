@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ChargeMethodScreen } from "@/components/device-instances/ChargeMethodScreen";
 import { CarSimulatorPanel } from "@/components/device-instances/CarSimulatorPanel";
 import { ConnectorChargeCard } from "@/components/device-instances/ConnectorChargeCard";
 import { DeviceBottomNav } from "@/components/device-instances/DeviceBottomNav";
@@ -23,6 +24,7 @@ interface RfidPromptState {
   connectorId: number;
   connectorLabel: string;
   maxPowerKw: number | null;
+  vehicleId?: boolean;
 }
 
 /**
@@ -48,6 +50,7 @@ export default function InstanceHomePage() {
   const [connectorErrors, setConnectorErrors] = useState<Record<number, string>>({});
   const [summary, setSummary] = useState<PostChargeSummary | null>(null);
   const [rfidPrompt, setRfidPrompt] = useState<RfidPromptState | null>(null);
+  const [methodPrompt, setMethodPrompt] = useState<(RfidPromptState & { expiresAt: number }) | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadInstance = useCallback(async () => {
@@ -100,7 +103,7 @@ export default function InstanceHomePage() {
 
   function openRfidPrompt(connectorId: number, connectorLabel: string, maxPowerKw: number | null) {
     setConnectorErrors((prev) => ({ ...prev, [connectorId]: "" }));
-    setRfidPrompt({ connectorId, connectorLabel, maxPowerKw });
+    setMethodPrompt({ connectorId, connectorLabel, maxPowerKw, expiresAt: now.getTime() + 60_000 });
   }
 
   async function handlePresentCard(idTag: string) {
@@ -119,6 +122,7 @@ export default function InstanceHomePage() {
         return;
       }
       setRfidPrompt(null);
+      setMethodPrompt(null);
       await loadConnectors();
     } finally {
       setPendingConnectorId(null);
@@ -219,6 +223,13 @@ export default function InstanceHomePage() {
       </div>
 
       <DeviceScreenFrame>
+        {methodPrompt ? <ChargeMethodScreen
+          instanceId={instanceId} serialNumber={instance.chargePointId} price={price} currency={currency}
+          expiresAt={methodPrompt.expiresAt}
+          onCard={() => setRfidPrompt(methodPrompt)}
+          onVehicleId={() => setRfidPrompt({ ...methodPrompt, vehicleId: true })}
+          onClose={() => { setMethodPrompt(null); setRfidPrompt(null); }}
+        /> : <>
         <HomeHeaderBar
           instanceId={instanceId}
           name={instance.name}
@@ -267,6 +278,7 @@ export default function InstanceHomePage() {
             </div>
           </>
         ) : null}
+        </>}
       </DeviceScreenFrame>
 
       <CarSimulatorPanel
@@ -288,6 +300,7 @@ export default function InstanceHomePage() {
       {rfidPrompt ? (
         <RfidPromptModal
           connectorLabel={rfidPrompt.connectorLabel}
+          vehicleId={rfidPrompt.vehicleId}
           masterCardIdTag={instance.masterCardIdTag}
           pending={pendingConnectorId === rfidPrompt.connectorId}
           error={connectorErrors[rfidPrompt.connectorId] || null}

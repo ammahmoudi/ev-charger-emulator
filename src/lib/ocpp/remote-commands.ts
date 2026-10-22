@@ -70,6 +70,7 @@ export function registerRemoteCommandHandlers(
   const onError = deps.onError ?? (() => {});
 
   const activeTransactions = new Map<number, OcppActiveTransaction>();
+  const pendingStarts = new Set<number>();
   /** Per-connector cumulative energy register (Wh), persisted across transactions for this process's lifetime. */
   const meterRegisterWh = new Map<number, number>();
   const transactionSimState = new Map<number, TransactionSimState>();
@@ -92,7 +93,7 @@ export function registerRemoteCommandHandlers(
   function findAvailableConnectorId(): number | undefined {
     return session
       .listConnectorStatuses()
-      .find((info) => info.status === "Available" && !activeTransactions.has(info.connectorId))?.connectorId;
+      .find((info) => (info.status === "Available" || (deps.prepareStart && info.status === "Preparing")) && !pendingStarts.has(info.connectorId) && !activeTransactions.has(info.connectorId))?.connectorId;
   }
 
   async function getRatedPowerKw(): Promise<number> {
@@ -104,7 +105,7 @@ export function registerRemoteCommandHandlers(
   async function getMeterIntervalMs(): Promise<number> {
     const { known } = await configStore.list([METER_INTERVAL_CONFIG_KEY]);
     const parsed = known[0]?.value !== undefined ? Number(known[0].value) : NaN;
-    const seconds = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_METER_INTERVAL_SEC;
+    const seconds = Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_METER_INTERVAL_SEC;
     return seconds * 1000;
   }
 
@@ -333,7 +334,7 @@ export function registerRemoteCommandHandlers(
   async function startMeterValuesLoop(connectorId: number): Promise<void> {
     const intervalMs = await getMeterIntervalMs();
     const state = transactionSimState.get(connectorId);
-    if (!state) return;
+    if (!state || intervalMs === 0) return;
     state.calendarBoundary=calendarMeterBoundary(deps.calendarMeterBoundaryAt,state.startedAtMs,at=>sendMeterValues(connectorId,at));
     state.meterValuesTimer = setInterval(() => {
       void sendMeterValues(connectorId).catch((err) => onError(toError(err)));
@@ -342,7 +343,13 @@ export function registerRemoteCommandHandlers(
 
   async function startTransaction(connectorId: number, idTag: string): Promise<void> {
     try {
-      session.setConnectorStatus(connectorId, "Preparing");
+      const { known } = await configStore.list(["AuthorizeRemoteTxRequests"]);
+      if (known[0]?.value === "true") {
+        const auth = await client.call("Authorize", { idTag });
+        if ((auth.idTagInfo as { status?: string } | undefined)?.status !== "Accepted") return;
+      }
+      if (deps.prepareStart && !(await deps.prepareStart(connectorId, idTag))) return;
+      if (session.getConnectorStatus(connectorId)?.status !== "Preparing") session.setConnectorStatus(connectorId, "Preparing");
       const meterStartWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
       const response = await client.call("StartTransaction", {
         connectorId,
@@ -390,6 +397,10 @@ export function registerRemoteCommandHandlers(
     } catch (err) {
       session.setConnectorStatus(connectorId, "Available");
       onError(toError(err));
+    } finally {
+      if (!activeTransactions.has(connectorId)) {
+        await deps.cancelStart?.(connectorId).catch((err) => onError(toError(err)));
+      }
     }
   }
 
@@ -408,14 +419,14 @@ export function registerRemoteCommandHandlers(
     }
 
     const info = session.getConnectorStatus(connectorId);
-    if (!info || activeTransactions.has(connectorId)) {
+    if (!info || pendingStarts.has(connectorId) || activeTransactions.has(connectorId)) {
       return { status: "Rejected" };
     }
     if (info.status === "Reserved") {
       if (!(await reservationHandlers.consumeReservation(connectorId, idTag))) {
         return { status: "Rejected" };
       }
-    } else if (info.status !== "Available") {
+    } else if (info.status !== "Available" && !(deps.prepareStart && info.status === "Preparing")) {
       return { status: "Rejected" };
     }
 
@@ -425,7 +436,10 @@ export function registerRemoteCommandHandlers(
 
     // Deferred to a macrotask so the RemoteStartTransaction.conf is always sent before
     // any follow-up StatusNotification/StartTransaction messages it triggers.
-    setImmediate(() => void startTransaction(connectorId, idTag));
+    pendingStarts.add(connectorId);
+    setImmediate(() => {
+      void startTransaction(connectorId, idTag).finally(() => pendingStarts.delete(connectorId));
+    });
     return { status: "Accepted" };
   }
 
@@ -488,7 +502,7 @@ export function registerRemoteCommandHandlers(
     }
   }
 
-  function handleRemoteStopTransaction(payload: Record<string, unknown>): { status: "Accepted" | "Rejected" } {
+  async function handleRemoteStopTransaction(payload: Record<string, unknown>): Promise<{ status: "Accepted" | "Rejected" }> {
     const transactionId = payload.transactionId;
     if (typeof transactionId !== "number") {
       throw new OcppCallError("PropertyConstraintViolation", "transactionId is required");
@@ -496,7 +510,7 @@ export function registerRemoteCommandHandlers(
 
     const entry = Array.from(activeTransactions.values()).find((t) => t.transactionId === transactionId);
     if (!entry) {
-      return { status: "Rejected" };
+      return { status: deps.requestStop && await deps.requestStop(transactionId) ? "Accepted" : "Rejected" };
     }
 
     setImmediate(() => void stopTransaction(entry, "Remote"));
@@ -515,6 +529,8 @@ export function registerRemoteCommandHandlers(
 
   async function performReset(type: "Hard" | "Soft"): Promise<void> {
     const reason = type === "Hard" ? "HardReset" : "SoftReset";
+    for (const connectorId of pendingStarts) await deps.cancelStart?.(connectorId);
+    pendingStarts.clear();
     for (const entry of Array.from(activeTransactions.values())) {
       await stopTransaction(entry, reason);
     }
@@ -540,9 +556,14 @@ export function registerRemoteCommandHandlers(
   async function handleGetConfiguration(
     payload: Record<string, unknown>,
   ): Promise<{ configurationKey: OcppConfigurationEntry[]; unknownKey: string[] }> {
-    const keys = Array.isArray(payload.key)
-      ? payload.key.filter((key): key is string => typeof key === "string")
-      : undefined;
+    if (payload.key !== undefined && (!Array.isArray(payload.key) || payload.key.some((key) => typeof key !== "string" || key.length > 50))) {
+      throw new OcppCallError("TypeConstraintViolation", "key must be an array of strings of at most 50 characters");
+    }
+    const keys = payload.key as string[] | undefined;
+    const limit = Number((await configStore.list(["GetConfigurationMaxKeys"])).known[0]?.value);
+    if (keys && limit > 0 && keys.length > limit) {
+      throw new OcppCallError("OccurenceConstraintViolation", `At most ${limit} keys may be requested`);
+    }
     const { known, unknown } = await configStore.list(keys);
     return { configurationKey: known, unknownKey: unknown };
   }
@@ -554,7 +575,22 @@ export function registerRemoteCommandHandlers(
     if (typeof key !== "string" || typeof value !== "string") {
       throw new OcppCallError("PropertyConstraintViolation", "key and value are required");
     }
-    return { status: await configStore.set(key, value) };
+    if (["HeartbeatInterval", "MeterValueSampleInterval", "ConnectionTimeOut"].includes(key) &&
+        (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 2_147_483 || Number(value) < (key === "MeterValueSampleInterval" ? 0 : 1))) {
+      return { status: "Rejected" };
+    }
+    const status = await configStore.set(key, value);
+    if (status === "Accepted") {
+      if (key === "HeartbeatInterval") session.setHeartbeatInterval(Number(value));
+      if (key === "MeterValueSampleInterval") {
+        for (const connectorId of activeTransactions.keys()) {
+          stopMeterValuesLoop(connectorId);
+          await startMeterValuesLoop(connectorId);
+        }
+      }
+      await deps.onConfigurationChanged?.(key, value);
+    }
+    return { status };
   }
 
   function handleChangeAvailability(
@@ -715,6 +751,10 @@ export function registerRemoteCommandHandlers(
     getLocalAuthListVersion: () => localAuthListHandlers.getVersion(),
     listLocalAuthListEntries: () => localAuthListHandlers.listEntries(),
     dispose(): void {
+      for (const connectorId of pendingStarts) {
+        void deps.cancelStart?.(connectorId).catch((err) => onError(toError(err)));
+      }
+      pendingStarts.clear();
       client.unregisterHandler("RemoteStartTransaction");
       client.unregisterHandler("RemoteStopTransaction");
       client.unregisterHandler("UnlockConnector");

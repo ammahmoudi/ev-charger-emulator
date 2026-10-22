@@ -230,6 +230,7 @@ model DeviceInstance {
   outboxMessages            DeviceInstanceOutboxMessage[]
   reservations              DeviceInstanceReservation[]
   chargingProfiles          DeviceInstanceChargingProfile[]
+  ocppConfiguration         DeviceInstanceOcppConfiguration[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -458,6 +459,8 @@ model DeviceInstanceConnectorState {
   /// `connector-sessions.ts`'s `connectEv`/`disconnectEv`. Unplugging mid-session force-stops it
   /// with `stopCause: "EV Disconnected"`, a value `stop-causes.ts` already reserved for this.
   evConnected Boolean @default(false)
+  preparingSince DateTime?
+  activeStartPending Boolean @default(false)
 
   activeIdTag         String?
   activeTransactionId Int?
@@ -510,4 +513,15 @@ model DeviceInstanceConnectorDiagnosticState {
   updatedAt DateTime @updatedAt
 
   @@unique([deviceInstanceId, connectorId])
+}
+
+/// Protocol configuration overrides, separate from HMI parameter names.
+model DeviceInstanceOcppConfiguration {
+  deviceInstanceId String
+  deviceInstance DeviceInstance @relation(fields: [deviceInstanceId], references: [id], onDelete: Cascade)
+  key String
+  value String
+  updatedAt DateTime @updatedAt
+
+  @@id([deviceInstanceId, key])
 }

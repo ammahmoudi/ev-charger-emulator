@@ -57,6 +57,12 @@ export class OcppChargePointSession extends TypedEventEmitter<OcppChargePointSes
     this.client.on("disconnected", this.handleClientDisconnected);
   }
 
+  /** Applies an accepted HeartbeatInterval change to the active heartbeat loop. */
+  setHeartbeatInterval(seconds: number): void {
+    if (!Number.isInteger(seconds) || seconds <= 0) throw new Error("HeartbeatInterval must be positive");
+    if (this.bootStatus === "accepted") this.startHeartbeat(seconds);
+  }
+
   getBootStatus(): "unknown" | "pending" | "accepted" | "rejected" {
     return this.bootStatus;
   }

@@ -51,15 +51,15 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
     instanceId = created.instance.id;
   }
 
-  it("starts a local session in Preparing and mirrors it onto the OCPP session", async () => {
+  it("starts charging when both authorization and the EV are present", async () => {
     await setup();
     await connectEv(instanceId, 1);
     const view = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
-    expect(view.status).toBe("Preparing");
+    expect(view.status).toBe("Charging");
     expect(view.locked).toBe(true);
 
     const live = getInstanceConnectorStatuses(instanceId).find((c) => c.connectorId === 1);
-    expect(live?.status).toBe("Preparing");
+    expect(live?.status).toBe("Charging");
   });
 
   it("rejects a non-positive chargeRateKw", async () => {
@@ -125,7 +125,6 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
   it("stopping during Preparing (no transaction minted yet) skips Finishing and goes straight to Available", async () => {
     await setup();
-    await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
     // Mirrors what disconnectEv itself does before force-stopping — clear the flag first so the
     // stop settles on Available, not Preparing (see the dedicated "settles back to Preparing" test).
@@ -206,7 +205,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
 
     await stopChargingTest(instanceId, 1);
     const view = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
-    expect(view.status).toBe("Preparing");
+    expect(view.status).toBe("Charging");
   });
 
   it("adoptRemoteSession refuses to start on a connector running a hardware output test", async () => {
@@ -238,16 +237,19 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions (integration)", (
       listConnectorStates(instanceId, preloaded),
       listConnectorStates(instanceId),
     ]);
-    expect(withPreload).toEqual(withoutPreload);
+    expect(withPreload.map((c) => ({ ...c, activeSession: c.activeSession ? { ...c.activeSession, currentEnergyWh: 0 } : null })))
+      .toEqual(withoutPreload.map((c) => ({ ...c, activeSession: c.activeSession ? { ...c.activeSession, currentEnergyWh: 0 } : null })));
   });
 
-  it("startChargingSession refuses to start when no EV is connected", async () => {
+  it("authorization first waits for the EV without creating a transaction", async () => {
     await setup();
-    await expect(startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 })).rejects.toThrow(
-      /no EV connected/,
-    );
-  });
-});
+    const view = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
+    expect(view.status).toBe("Preparing");
+    expect(view.activeSession?.transactionId).toBeNull();
+    const connected = await connectEv(instanceId, 1);
+    expect(connected.status).toBe("Charging");
+    expect(connected.activeSession?.transactionId).toBe(1);
+  });});
 
 // The EV plug/unplug control (issue: car/device simulator) — connectEv/disconnectEv model the
 // physical cable/car presence `startChargingSession` now requires, independent of authorization.
@@ -273,7 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
     expect(view.activeSession).toBeNull();
 
     const started = await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
-    expect(started.status).toBe("Preparing");
+    expect(started.status).toBe("Charging");
     expect(started.activeSession?.idTag).toBe("CARD-1");
   });
 
@@ -318,20 +320,20 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
     expect(events.filter((e) => e.description.includes("EV disconnected"))).toHaveLength(1);
   });
 
-  it("disconnectEv during Preparing force-stops the session (stopCause EV Disconnected) and clears evConnected", async () => {
+  it("disconnectEv immediately after charging starts stops through Finishing", async () => {
     await setup();
     await connectEv(instanceId, 1);
     await startChargingSession(instanceId, 1, { idTag: "CARD-1", chargeRateKw: 20 });
 
     const view = await disconnectEv(instanceId, 1);
     expect(view.evConnected).toBe(false);
-    expect(view.status).toBe("Available");
+    expect(view.status).toBe("Finishing");
     expect(view.activeSession).toBeNull();
 
     const sessions = await prisma.deviceInstanceSession.findMany({ where: { deviceInstanceId: instanceId } });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].stopCause).toBe("EV Disconnected");
-    expect(sessions[0].energyWh).toBe(0);
+    expect(sessions[0].energyWh).toBeGreaterThanOrEqual(0);
   });
 
   it("disconnectEv during Charging force-stops through Finishing (stopCause EV Disconnected) and clears evConnected", async () => {
@@ -384,7 +386,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connectEv/disconnectEv (integration)
 
     // And it's immediately ready to start another session — no need to unplug/replug.
     const restarted = await startChargingSession(instanceId, 1, { idTag: "CARD-2", chargeRateKw: 20 });
-    expect(restarted.status).toBe("Preparing");
+    expect(restarted.status).toBe("Charging");
     expect(restarted.activeSession?.idTag).toBe("CARD-2");
   });
 });
@@ -418,19 +420,16 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a co
     await queue.next(); // BootNotification, irrelevant here
 
     await connectEv(instanceId, 1);
-    await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
-    await prisma.deviceInstanceConnectorState.update({
-      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
-      data: { activeStartedAt: new Date(Date.now() - 20_000) },
-    });
+    const startPromise = startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
 
-    const listPromise = listConnectorStates(instanceId);
+
     const [, startId, startAction, startPayload] = await queue.next();
     expect(startAction).toBe("StartTransaction");
     expect(startPayload).toMatchObject({ connectorId: 1, idTag: "MASTER-TEST", meterStart: 0 });
     serverSocket.send(JSON.stringify([3, startId, { idTagInfo: { status: "Accepted" }, transactionId: 900 }]));
 
-    const states = await listPromise;
+    await startPromise;
+    const states = await listConnectorStates(instanceId);
     const connector1 = states.find((c) => c.connectorId === 1)!;
     expect(connector1.status).toBe("Charging");
     expect(connector1.activeSession?.transactionId).toBe(900);
@@ -467,17 +466,13 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a co
     await queue.next(); // BootNotification
 
     await connectEv(instanceId, 1);
-    await startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
-    await prisma.deviceInstanceConnectorState.update({
-      where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
-      data: { activeStartedAt: new Date(Date.now() - 20_000) },
-    });
+    const startPromise = startChargingSession(instanceId, 1, { idTag: "MASTER-TEST", chargeRateKw: 20 });
 
-    const listPromise = listConnectorStates(instanceId);
+
     const [, startId, , startPayload] = await queue.next();
     expect(startPayload).toMatchObject({ connectorId: 1, meterStart: 5000 });
     serverSocket.send(JSON.stringify([3, startId, { idTagInfo: { status: "Accepted" }, transactionId: 901 }]));
-    await listPromise;
+    await startPromise;
 
     const stopPromise = stopChargingSession(instanceId, 1, { stopCause: "Manu. Stop" });
     const [, stopId, stopAction, stopPayload] = await queue.next();
