@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // A handful of `src/lib/device-instances/**` tests are integration tests against the local
 // Postgres from `docker-compose.yml` (persistence is most of what that module owns — mocking
@@ -31,6 +31,13 @@ export default defineConfig({
           name: "node",
           environment: "node",
           include: ["src/**/*.test.ts", "scripts/cgp-*.test.ts"],
+          // These are native node:test suites, run by npm run test:cgp-native.
+          exclude: [...configDefaults.exclude,
+            "scripts/cgp-rfid-denial-probe.test.ts",
+            "scripts/cgp-stale-meter-wire.test.ts",
+            "scripts/cgp-headless-meter.test.ts",
+            "scripts/cgp-stale-meter.test.ts",
+          ],
         },
       },
       {

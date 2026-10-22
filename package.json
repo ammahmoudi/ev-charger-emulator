@@ -13,7 +13,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "test:cgp-native": "node --import tsx --test --test-concurrency=1 scripts/cgp-rfid-denial-probe.test.ts scripts/cgp-stale-meter-wire.test.ts scripts/cgp-headless-meter.test.ts scripts/cgp-stale-meter.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.5.0",
