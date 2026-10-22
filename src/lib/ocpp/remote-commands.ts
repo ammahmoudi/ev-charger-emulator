@@ -1,3 +1,4 @@
+import {calendarMeterBoundary} from "./calendar-meter-boundary";
 import { OcppCallError } from "./errors";
 import { InMemoryConfigurationStore } from "./in-memory-configuration-store";
 import { createChargingProfileHandlers } from "./charging-profile";
@@ -35,6 +36,7 @@ interface TransactionSimState {
   meterStartWh: number;
   chargeRateKw: number;
   initialSocPercent: number;
+  calendarBoundary?: ReturnType<typeof calendarMeterBoundary>;
   meterValuesTimer: ReturnType<typeof setInterval> | null;
 }
 
@@ -208,6 +210,7 @@ export function registerRemoteCommandHandlers(
   async function buildSampledValues(
     connectorId: number,
     context: "Sample.Periodic" | "Transaction.End",
+    sampledAt = Date.now(),
   ): Promise<{ sampledValue: Record<string, string>[]; meterWh: number }> {
     const state = transactionSimState.get(connectorId);
     if (!state) {
@@ -227,7 +230,8 @@ export function registerRemoteCommandHandlers(
       };
     }
 
-    const now = Date.now();
+    const now = sampledAt;
+    if(now>Date.now()||now<state.startedAtMs)throw Error('MODEL_SAMPLE_TIME_INVALID');
     const elapsedSec = Math.max(0, (now - state.startedAtMs) / 1_000);
     const schedule = await getActiveTxProfileSchedule(connectorId);
     const energyWhDelta = energyWhSinceStart(state, now, schedule);
@@ -303,12 +307,14 @@ export function registerRemoteCommandHandlers(
     };
   }
 
-  async function sendMeterValues(connectorId: number): Promise<void> {
+  async function sendMeterValues(connectorId: number, sampledAt?:number): Promise<void> {
     const entry = activeTransactions.get(connectorId);
-    const { sampledValue } = await buildSampledValues(connectorId, "Sample.Periodic");
+    if(sampledAt===undefined)await transactionSimState.get(connectorId)?.calendarBoundary?.flush();
+    const at=sampledAt??Date.now();
+    const { sampledValue } = await buildSampledValues(connectorId, "Sample.Periodic",at);
     const payload: Record<string, unknown> = {
       connectorId,
-      meterValue: [{ timestamp: new Date().toISOString(), sampledValue }],
+      meterValue: [{ timestamp: new Date(at).toISOString(), sampledValue }],
     };
     if (entry) {
       payload.transactionId = entry.transactionId;
@@ -318,6 +324,7 @@ export function registerRemoteCommandHandlers(
 
   function stopMeterValuesLoop(connectorId: number): void {
     const state = transactionSimState.get(connectorId);
+    state?.calendarBoundary?.close();
     if (state?.meterValuesTimer) {
       clearInterval(state.meterValuesTimer);
       state.meterValuesTimer = null;
@@ -328,6 +335,7 @@ export function registerRemoteCommandHandlers(
     const intervalMs = await getMeterIntervalMs();
     const state = transactionSimState.get(connectorId);
     if (!state || intervalMs === 0) return;
+    state.calendarBoundary=calendarMeterBoundary(deps.calendarMeterBoundaryAt,state.startedAtMs,at=>sendMeterValues(connectorId,at));
     state.meterValuesTimer = setInterval(() => {
       void sendMeterValues(connectorId).catch((err) => onError(toError(err)));
     }, intervalMs);

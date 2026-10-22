@@ -1,0 +1,76 @@
+{
+  "reportedConfiguration": {
+    "HeartbeatInterval": "300",
+    "ConnectionTimeOut": "60",
+    "NumberOfConnectors": "2",
+    "MeterValueSampleInterval": "1",
+    "MeterValuesSampledData": "Energy.Active.Import.Register,Power.Active.Import,Power.Offered,Voltage,Current.Import,SoC",
+    "SupportedFeatureProfiles": "Core,FirmwareManagement,LocalAuthListManagement,Reservation,SmartCharging,RemoteTrigger",
+    "ReserveConnectorZeroSupported": "true",
+    "LocalPreAuthorize": "false",
+    "AllowOfflineTxForUnknownId": "false",
+    "LocalAuthListEnabled": "true",
+    "SendLocalListMaxLength": "500"
+  },
+  "commissioning": {
+    "subject": "EV charger emulator, OCPP 1.6J wire, registerRemoteCommandHandlers simulation (NOT a physical charger)",
+    "method": "RemoteStopTransaction sent at an instant between samples; overshoot = StopTransaction.meterStop - register interpolated from the received MeterValues at the request instant",
+    "rateKw": 72,
+    "meterIntervalSeconds": 1,
+    "trials": 5,
+    "perTrial": [
+      {
+        "stopDelayMs": 2,
+        "overshootWh": 0.09770687936190825,
+        "meterStartWh": 0,
+        "meterStopWh": 66,
+        "samples": 4
+      },
+      {
+        "stopDelayMs": 1,
+        "overshootWh": 0.05094905094904334,
+        "meterStartWh": 66,
+        "meterStopWh": 137,
+        "samples": 4
+      },
+      {
+        "stopDelayMs": 1,
+        "overshootWh": 0.035964035964042296,
+        "meterStartWh": 137,
+        "meterStopWh": 213,
+        "samples": 4
+      },
+      {
+        "stopDelayMs": 1,
+        "overshootWh": 0.0009990009990019644,
+        "meterStartWh": 213,
+        "meterStopWh": 294,
+        "samples": 5
+      },
+      {
+        "stopDelayMs": 1,
+        "overshootWh": 0.08591408591411209,
+        "meterStartWh": 294,
+        "meterStopWh": 380,
+        "samples": 5
+      }
+    ],
+    "p95": {
+      "overshootWh": 1,
+      "stopDelayMs": 2
+    },
+    "capability": {
+      "mode": "REACTIVE_MEASURED",
+      "overshootWh": 1,
+      "stopDelayMs": 100,
+      "meterIntervalSeconds": 1,
+      "maxMeterStalenessSeconds": 5
+    }
+  },
+  "enforcedSession": {
+    "envelopeWh": 300,
+    "deliveredWh": 290,
+    "stopReason": "ENERGY_ENVELOPE",
+    "unenforcedWouldReachWhAt30s": 600
+  }
+}

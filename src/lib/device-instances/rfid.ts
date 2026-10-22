@@ -2,7 +2,7 @@ import {
   startChargingSession,
   type ConnectorRuntimeView,
 } from "@/lib/device-instances/connector-sessions";
-import { lookupLocalAuthEntry } from "@/lib/device-instances/local-auth";
+import { isLocalAuthListEnabled, lookupLocalAuthEntry } from "@/lib/device-instances/local-auth";
 import { callOcpp, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
 import { prisma } from "@/lib/prisma";
 
@@ -24,7 +24,8 @@ export async function presentRfidCard(
     return startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
   }
 
-  const localEntry = await lookupLocalAuthEntry(deviceInstanceId, idTag);
+  // The local list only counts while the charger's own `LocalAuthListEnabled` switch is on.
+  const localEntry = (await isLocalAuthListEnabled(deviceInstanceId)) ? await lookupLocalAuthEntry(deviceInstanceId, idTag) : null;
   if (localEntry) {
     return startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
   }

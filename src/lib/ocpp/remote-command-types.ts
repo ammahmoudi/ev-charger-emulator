@@ -134,6 +134,8 @@ export interface OcppLocalAuthListStore {
 }
 
 export interface RemoteCommandHandlersDeps {
+  /** Optional bounded future absolute register observation for real-clock calendar rehearsals. */
+  calendarMeterBoundaryAt?: string;
   onConfigurationChanged?: (key: string, value: string) => Promise<void>;
   /** Delegate the physical EV/authorization handshake to the device runtime. */
   prepareStart?: (connectorId: number, idTag: string) => Promise<boolean>;

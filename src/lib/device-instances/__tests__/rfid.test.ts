@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 
 import { connectEv, listConnectorStates } from "../connector-sessions";
 import { upsertLocalAuthEntry } from "../local-auth";
+import { prisma } from "@/lib/prisma";
 import { presentRfidCard, RfidError } from "../rfid";
 import { disposeDeviceInstance, startDeviceInstance } from "../runtime";
 import { MockCsmsServer } from "@/lib/ocpp/__tests__/mock-csms-server";
@@ -55,6 +56,44 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
 
     const view = await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20);
     expect(view.status).toBe("Charging");
+  });
+
+  describe("LocalAuthListEnabled (CGP-0012/0013: a charger must not authorize from its own list when the CSMS turned that off)", () => {
+    async function setLocalAuthListEnabled(value: string) {
+      const model = await prisma.deviceModelParameter.create({
+        data: { deviceModelId: deviceModel.id, key: "LocalAuthListEnabled", label: "Local authorization list enabled", category: "OTHER", valueType: "BOOLEAN", defaultValue: "true" },
+      });
+      await prisma.deviceInstanceParameter.create({ data: { deviceInstanceId: instanceId, deviceModelParameterId: model.id, key: "LocalAuthListEnabled", value } });
+    }
+
+    it("still honours the local list while the switch is on (default)", async () => {
+      const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1" });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+      await setLocalAuthListEnabled("true");
+      await connectEv(instanceId, 1);
+      await upsertLocalAuthEntry(instanceId, "LOCAL-CARD", "ACCEPTED");
+      expect((await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20)).status).toBe("Preparing");
+    });
+
+    it("ignores the local list once the switch is off: the card needs the CSMS (here: unreachable -> refused)", async () => {
+      const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1" });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+      await setLocalAuthListEnabled("false");
+      await connectEv(instanceId, 1);
+      await upsertLocalAuthEntry(instanceId, "LOCAL-CARD", "ACCEPTED");
+      await expect(presentRfidCard(instanceId, 1, "LOCAL-CARD", 20)).rejects.toThrow(RfidError);
+    });
+
+    it("does not affect the master card, which the station always accepts locally", async () => {
+      const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1" });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+      await setLocalAuthListEnabled("false");
+      await connectEv(instanceId, 1);
+      expect((await presentRfidCard(instanceId, 1, "MASTER-1", 20)).status).toBe("Preparing");
+    });
   });
 
   it("rejects an unknown idTag while disconnected", async () => {

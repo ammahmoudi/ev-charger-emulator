@@ -79,3 +79,13 @@ This builds and starts Postgres, runs `prisma migrate deploy` + the seed script 
 the app on [http://localhost:3000](http://localhost:3000) — no local `npm install` or manual DB
 setup needed. Re-running it is safe: pending migrations are applied and the seed script leaves an
 already-seeded "Demo PEVC3107E" instance as-is.
+
+### CGP test runners
+
+`npm test` runs the existing Vitest node and jsdom projects, including the two Vitest CGP script suites. Four CGP protocol/fault suites use native `node:test`; run them separately with Node 24 and installed tsx:
+
+```sh
+npm run test:cgp-native
+```
+
+That command explicitly names all four native files and serializes them. Vitest excludes only those native files in addition to its standard exclusions; no assertions or acceptance requirements are skipped by the dedicated command. These tests use local protocol peers and do not establish real charging-owner acceptance.
