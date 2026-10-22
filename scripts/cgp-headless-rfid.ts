@@ -21,9 +21,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { InMemoryConfigurationStore, OcppChargePointSession, OcppClient, registerRemoteCommandHandlers } from "../src/lib/ocpp";
 
-const url = process.env.OCPP_URL;
-const idTag = process.env.ID_TAG;
-if (!url || !idTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
+const inputUrl = process.env.OCPP_URL;
+const inputIdTag = process.env.ID_TAG;
+if (!inputUrl || !inputIdTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are required"); process.exit(1); }
+// Capture the validated values in fresh bindings for deferred evidence callbacks.
+const url = inputUrl;
+const idTag = inputIdTag;
 const source = process.env.SESSION_SOURCE ?? "RFID";
 const preadmit=process.env.CGP_APP_PRE_ADMIT_RECOVERY==='1';
 if(process.env.CGP_APP_PRE_ADMIT_RECOVERY!==undefined&&(!preadmit||source!=='APP'||process.env.CGP_SEQUENTIAL_APP!==undefined||process.env.CGP_CONNECTOR_IDS!==undefined))throw Error('exclusive single-target APP no-start fixture required');

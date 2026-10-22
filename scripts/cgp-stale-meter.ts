@@ -1,5 +1,5 @@
 /** Device-side wire fault only. Physical register/time and all owner responses remain real. */
-export function staleMeterFault(env:NodeJS.ProcessEnv,now=()=>new Date().toISOString()){
+export function staleMeterFault(env:Readonly<Record<string,string|undefined>>,now=()=>new Date().toISOString()){
  if(env.CGP_STALE_METER===undefined)return null;
  if(env.CGP_STALE_METER!=='1'||env.CGP_STALE_METER_VERSION!=='1'||env.SESSION_SOURCE!=='APP'||!/^[a-f0-9]{64}$/.test(env.CGP_STALE_METER_NONCE??''))throw Error('Explicit version1 nonce-bound APP stale meter fault required');
  for(const key of ['CGP_SEQUENTIAL_APP','CGP_RFID_DENIAL_TRIGGER','CGP_CONNECTOR_IDS','STOP_AFTER_S'])if(env[key]!==undefined)throw Error('Stale meter fault excludes '+key);
