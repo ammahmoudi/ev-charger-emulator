@@ -89,3 +89,15 @@ npm run test:cgp-native
 ```
 
 That command explicitly names all four native files and serializes them. Vitest excludes only those native files in addition to its standard exclusions; no assertions or acceptance requirements are skipped by the dedicated command. These tests use local protocol peers and do not establish real charging-owner acceptance.
+
+### Standalone production type checking
+
+`npm run build` uses `tsconfig.build.json`, which inherits the application's strict
+TypeScript settings and checks production source and generated Next.js route types.
+Commissioning and component tests remain in their existing test runners; optional
+cross-owner commissioning checks need the adapter checkout beside the emulator and
+are not application dependencies of the standalone Docker image.
+
+Run `npm run typecheck` for the same production type
+boundary and `npm run test:build-boundary` to verify its source
+coverage. This does not disable Next.js type errors or change charging behavior.
