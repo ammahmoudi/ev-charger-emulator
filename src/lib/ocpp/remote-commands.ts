@@ -103,7 +103,7 @@ export function registerRemoteCommandHandlers(
   async function getMeterIntervalMs(): Promise<number> {
     const { known } = await configStore.list([METER_INTERVAL_CONFIG_KEY]);
     const parsed = known[0]?.value !== undefined ? Number(known[0].value) : NaN;
-    const seconds = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_METER_INTERVAL_SEC;
+    const seconds = Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_METER_INTERVAL_SEC;
     return seconds * 1000;
   }
 
@@ -327,7 +327,7 @@ export function registerRemoteCommandHandlers(
   async function startMeterValuesLoop(connectorId: number): Promise<void> {
     const intervalMs = await getMeterIntervalMs();
     const state = transactionSimState.get(connectorId);
-    if (!state) return;
+    if (!state || intervalMs === 0) return;
     state.meterValuesTimer = setInterval(() => {
       void sendMeterValues(connectorId).catch((err) => onError(toError(err)));
     }, intervalMs);
@@ -335,8 +335,13 @@ export function registerRemoteCommandHandlers(
 
   async function startTransaction(connectorId: number, idTag: string): Promise<void> {
     try {
+      const { known } = await configStore.list(["AuthorizeRemoteTxRequests"]);
+      if (known[0]?.value === "true") {
+        const auth = await client.call("Authorize", { idTag });
+        if ((auth.idTagInfo as { status?: string } | undefined)?.status !== "Accepted") return;
+      }
       if (deps.prepareStart && !(await deps.prepareStart(connectorId, idTag))) return;
-      session.setConnectorStatus(connectorId, "Preparing");
+      if (session.getConnectorStatus(connectorId)?.status !== "Preparing") session.setConnectorStatus(connectorId, "Preparing");
       const meterStartWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
       const response = await client.call("StartTransaction", {
         connectorId,
@@ -543,9 +548,14 @@ export function registerRemoteCommandHandlers(
   async function handleGetConfiguration(
     payload: Record<string, unknown>,
   ): Promise<{ configurationKey: OcppConfigurationEntry[]; unknownKey: string[] }> {
-    const keys = Array.isArray(payload.key)
-      ? payload.key.filter((key): key is string => typeof key === "string")
-      : undefined;
+    if (payload.key !== undefined && (!Array.isArray(payload.key) || payload.key.some((key) => typeof key !== "string" || key.length > 50))) {
+      throw new OcppCallError("TypeConstraintViolation", "key must be an array of strings of at most 50 characters");
+    }
+    const keys = payload.key as string[] | undefined;
+    const limit = Number((await configStore.list(["GetConfigurationMaxKeys"])).known[0]?.value);
+    if (keys && limit > 0 && keys.length > limit) {
+      throw new OcppCallError("OccurenceConstraintViolation", `At most ${limit} keys may be requested`);
+    }
     const { known, unknown } = await configStore.list(keys);
     return { configurationKey: known, unknownKey: unknown };
   }
@@ -557,7 +567,22 @@ export function registerRemoteCommandHandlers(
     if (typeof key !== "string" || typeof value !== "string") {
       throw new OcppCallError("PropertyConstraintViolation", "key and value are required");
     }
-    return { status: await configStore.set(key, value) };
+    if (["HeartbeatInterval", "MeterValueSampleInterval", "ConnectionTimeOut"].includes(key) &&
+        (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 2_147_483 || Number(value) < (key === "MeterValueSampleInterval" ? 0 : 1))) {
+      return { status: "Rejected" };
+    }
+    const status = await configStore.set(key, value);
+    if (status === "Accepted") {
+      if (key === "HeartbeatInterval") session.setHeartbeatInterval(Number(value));
+      if (key === "MeterValueSampleInterval") {
+        for (const connectorId of activeTransactions.keys()) {
+          stopMeterValuesLoop(connectorId);
+          await startMeterValuesLoop(connectorId);
+        }
+      }
+      await deps.onConfigurationChanged?.(key, value);
+    }
+    return { status };
   }
 
   function handleChangeAvailability(

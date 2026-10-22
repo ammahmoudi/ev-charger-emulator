@@ -19,12 +19,12 @@ describe.skipIf(!process.env.DATABASE_URL)("PrismaConfigurationStore (integratio
     return new PrismaConfigurationStore(instanceId);
   }
 
-  it("list() with no keys returns every instance parameter, all read/write", async () => {
+  it("list() includes protocol keys and protects identity fields", async () => {
     const store = await setup();
     const { known, unknown } = await store.list();
     expect(unknown).toEqual([]);
-    expect(known.map((e) => e.key).sort()).toEqual(["currencyUnit", "firmwareVersion", "pricePerKwh", "serviceFeePerSession"]);
-    expect(known.every((e) => e.readonly === false)).toBe(true);
+    expect(known.map((e) => e.key)).toEqual(expect.arrayContaining(["HeartbeatInterval", "NumberOfConnectors", "currencyUnit", "firmwareVersion", "pricePerKwh", "serviceFeePerSession"]));
+    expect(known.find((e) => e.key === "firmwareVersion")?.readonly).toBe(true);
     expect(known.find((e) => e.key === "pricePerKwh")?.value).toBe("0.35");
   });
 

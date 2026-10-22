@@ -1,10 +1,10 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
-import { adoptRemoteSession, cancelRemotePreparation, prepareRemoteStart, stopChargingSession } from "@/lib/device-instances/connector-sessions";
+import { adoptRemoteSession, cancelRemotePreparation, prepareRemoteStart, refreshConnectorConfiguration, stopChargingSession } from "@/lib/device-instances/connector-sessions";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { drainOutbox } from "@/lib/device-instances/outbox";
 import { PrismaChargingProfileStore } from "@/lib/device-instances/prisma-charging-profile-store";
-import { PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
+import { getOcppIntervalMs, PrismaConfigurationStore } from "@/lib/device-instances/prisma-configuration-store";
 import { PrismaLocalAuthListStore } from "@/lib/device-instances/prisma-local-auth-list-store";
 import { PrismaReservationStore } from "@/lib/device-instances/prisma-reservation-store";
 import {
@@ -13,6 +13,7 @@ import {
   registerRemoteCommandHandlers,
   type OcppConnectionState,
   type OcppConnectorStatusInfo,
+  type OcppChargePointStatus,
   type RemoteCommandHandlers,
 } from "@/lib/ocpp";
 import { orderModelConnectors } from "./connectors";
@@ -56,7 +57,7 @@ async function writeStatus(
   }
 }
 
-function createEntry(instance: InstanceWithConnectors, firmwareVersion: string | undefined): RuntimeEntry {
+function createEntry(instance: InstanceWithConnectors, firmwareVersion: string | undefined, initialStatuses: Map<number, OcppChargePointStatus>): RuntimeEntry {
   const client = new OcppClient({ url: instance.csmsUrl });
   const session = new OcppChargePointSession(client, {
     identity: {
@@ -80,11 +81,13 @@ function createEntry(instance: InstanceWithConnectors, firmwareVersion: string |
     connectors: orderModelConnectors(instance.deviceModel.connectors).map((connector) => ({
       connectorId: connector.connectorId,
       label: connector.displayLabel,
+      initialStatus: initialStatuses.get(connector.connectorId),
     })),
   });
 
   const remoteCommands = registerRemoteCommandHandlers(client, session, {
     configStore: new PrismaConfigurationStore(instance.id),
+    onConfigurationChanged: (key) => refreshConnectorConfiguration(instance.id, key),
     prepareStart: (connectorId, idTag) => prepareRemoteStart(instance.id, connectorId, idTag),
     cancelStart: (connectorId) => cancelRemotePreparation(instance.id, connectorId),
     requestStop: async (transactionId) => {
@@ -150,7 +153,8 @@ function createEntry(instance: InstanceWithConnectors, firmwareVersion: string |
     if (entry.manuallyStopped) return;
     void writeStatus(instance.id, { statusReason: err.message });
   });
-  session.on("bootAccepted", () => {
+  session.on("bootAccepted", ({ heartbeatIntervalSec }) => {
+    void new PrismaConfigurationStore(instance.id).set("HeartbeatInterval", String(heartbeatIntervalSec > 0 ? heartbeatIntervalSec : 300)).catch(console.error);
     void writeStatus(instance.id, {
       status: DeviceConnectionStatus.CONNECTED,
       statusReason: null,
@@ -189,7 +193,22 @@ async function getOrCreateEntry(instance: InstanceWithConnectors): Promise<Runti
   const firmwareParameter = await prisma.deviceInstanceParameter.findFirst({
     where: { deviceInstanceId: instance.id, key: "firmwareVersion" },
   });
-  return createEntry(instance, firmwareParameter?.value ?? undefined);
+  // A fresh runtime cannot resume an unconfirmed network request from a previous process.
+  await prisma.deviceInstanceConnectorState.updateMany({
+    where: { deviceInstanceId: instance.id, status: "Preparing", activeStartPending: true, activeTransactionId: null },
+    data: { status: "Available", locked: false, preparingSince: null, activeIdTag: null, activeStartedAt: null,
+      activeChargeRateKw: null, activeIsRemote: false, activeStartPending: false },
+  });
+  const timeoutMs = await getOcppIntervalMs(instance.id, "ConnectionTimeOut", 60);
+  await prisma.deviceInstanceConnectorState.updateMany({
+    where: { deviceInstanceId: instance.id, status: "Preparing", preparingSince: { lte: new Date(Date.now() - timeoutMs) },
+      OR: [{ evConnected: false }, { activeIdTag: null }] },
+    data: { status: "Available", locked: false, preparingSince: null, activeIdTag: null, activeStartedAt: null,
+      activeTransactionId: null, activeChargeRateKw: null, activeIsRemote: false, activeStartPending: false },
+  });
+  const states = await prisma.deviceInstanceConnectorState.findMany({ where: { deviceInstanceId: instance.id } });
+  const initialStatuses = new Map(states.map((state) => [state.connectorId, state.status as OcppChargePointStatus]));
+  return createEntry(instance, firmwareParameter?.value ?? undefined, initialStatuses);
 }
 
 /**
