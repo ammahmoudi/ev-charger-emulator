@@ -1,5 +1,5 @@
 import{describe,it,expect}from'vitest';
-import{waitAppSession,type AppClockState}from'./cgp-app-session-clock';
+import{waitAppSession}from'./cgp-app-session-clock';
 describe('separate bounded APP idle and physical clocks',()=>{
  it('120seconds commissioning does not consume the actual300second physical budget',async()=>{
   let clock=0;const deadline:string[]=[];

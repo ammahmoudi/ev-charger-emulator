@@ -18,7 +18,7 @@ test('rejected configuration and divergent readback fail closed',async()=>{
 });
 for(const topology of [undefined,'1,2','unexpected-second'])test(`actual headless APP engine topology ${topology??'default'} reports genuine status/configuration/meters`,async()=>{
  const dir=mkdtempSync('/tmp/cgp-app-meter-wire-'),out=join(dir,'wire.json');
- const received: Array<{action:string;payload:any;at:number}>=[];let configuration:any;let readyAt=0;
+ const received: Array<{action:string;payload:Record<string,unknown>;at:number}>=[];let configuration:{configurationKey:Array<{key:string;readonly:boolean;value:string}>}|undefined;let readyAt=0;
  const server=new WebSocketServer({port:0,handleProtocols:p=>p.has('ocpp1.6')?'ocpp1.6':false});
  const timers:NodeJS.Timeout[]=[];
  server.on('connection',ws=>ws.on('message',raw=>{
@@ -49,16 +49,16 @@ for(const topology of [undefined,'1,2','unexpected-second'])test(`actual headles
   if(topology==='unexpected-second'){
    assert.equal(code,1,logs);assert.deepEqual(actual.unexpectedTransactions,[{connectorId:2,transactionId:4243}]);assert.equal(received.filter(x=>x.action==='StartTransaction').length,2);assert.equal(actual.stopConfirmed,false);return;
   }
-  assert.equal(code,0,logs);
+  assert.equal(code,0,logs);assert.ok(configuration,'actual GetConfiguration response absent');
   if(topology){
    assert.deepEqual(actual.connectorIds,[1,2]);assert.deepEqual(actual.unexpectedTransactions,[]);
    assert.ok(readyAt>0);assert.ok(received.some(x=>x.action==='StatusNotification'&&x.payload.connectorId===2&&x.payload.status==='Available'&&x.at<=readyAt));
-   assert.deepEqual(configuration.configurationKey.find((x:any)=>x.key==='NumberOfConnectors'),{key:'NumberOfConnectors',readonly:true,value:'2'});
+   assert.deepEqual(configuration.configurationKey.find(x=>x.key==='NumberOfConnectors'),{key:'NumberOfConnectors',readonly:true,value:'2'});
    assert.equal(received.filter(x=>x.action==='StartTransaction').length,1);
   }
-  assert.deepEqual(configuration.configurationKey.find((x:any)=>x.key==='MeterValueSampleInterval'),{key:'MeterValueSampleInterval',readonly:false,value:'1'});
+  assert.deepEqual(configuration.configurationKey.find(x=>x.key==='MeterValueSampleInterval'),{key:'MeterValueSampleInterval',readonly:false,value:'1'});
   const evidence=JSON.parse(readFileSync(out,'utf8'));assert.equal(evidence.actualMeterIntervalSeconds,1);assert.equal(evidence.stopConfirmed,true);
-  const periodic=received.filter(x=>x.action==='MeterValues' && x.payload.meterValue.some((m:any)=>m.sampledValue.some((v:any)=>v.context==='Sample.Periodic')));
+  const periodic=received.filter(x=>x.action==='MeterValues' && Array.isArray(x.payload.meterValue)&&x.payload.meterValue.some((m:unknown)=>m!==null&&typeof m==='object'&&'sampledValue' in m&&Array.isArray(m.sampledValue)&&m.sampledValue.some((v:unknown)=>v!==null&&typeof v==='object'&&'context' in v&&v.context==='Sample.Periodic')));
   assert.ok(periodic.length>=3,`only ${periodic.length} periodic meters`);
   const start=received.find(x=>x.action==='StartTransaction')!;assert.equal(start.payload.idTag,'OWNED-APP-TEST');assert.ok(periodic[0].at-start.at<=1250,'first meter exceeded1s plus250ms wire allowance');
   for(let i=1;i<periodic.length;i++)assert.ok(periodic[i].at-periodic[i-1].at<=1250,'periodic meter gap exceeded commissioned interval plus250ms wire allowance');

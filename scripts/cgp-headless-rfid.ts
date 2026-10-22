@@ -179,7 +179,7 @@ async function main() {
       if(sequential){
         if(session.getConnectorStatus(connectorId)?.status!=='Available')throw Error('Sequential connector not Available');
         await session.triggerStatusNotification(connectorId); // A genuine acknowledged Available, never a synthetic proof.
-        const {sequentialSessions:_reports,...physical}=makeEvidence();physical.frames=[...commonFrames,...frames.slice(sequentialFrameStart)];physical.outcome='ENDED_REMOTE';
+        const physical=makeEvidence();delete physical.sequentialSessions;physical.frames=[...commonFrames,...frames.slice(sequentialFrameStart)];physical.outcome='ENDED_REMOTE';
         if(index===1){const first=physical.frames.findIndex(f=>f.action==='RemoteStartTransaction'&&f.dir==='<-CSMS');if(first<0)throw Error('First APP remote start absent');commonFrames=physical.frames.slice(0,first);}
         sessionReports.push(physical);writeEvidence(makeEvidence());
         console.log(JSON.stringify({event:'SEQUENTIAL_SESSION_ENDED',index,transactionId:tx.transactionId,stopConfirmed:true,availableAcknowledged:true}));
