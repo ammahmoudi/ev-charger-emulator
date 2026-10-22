@@ -85,7 +85,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Preparing handshake regression", () 
       const frame = JSON.parse(data.toString()) as unknown[];
       frames.push(frame);
       if (frame[0] === 2) {
-        const response = frame[2] === "StartTransaction" ? { transactionId: 456, idTagInfo: { status: "Accepted" } } : {};
+        const response = frame[2] === "StartTransaction" ? { transactionId: 456, idTagInfo: { status: "Accepted" } } : frame[2] === "Authorize" ? { idTagInfo: { status: "Accepted" } } : {};
         ws.send(JSON.stringify([3, frame[1], response]));
       }
     });
@@ -112,7 +112,11 @@ describe.skipIf(!process.env.DATABASE_URL)("Preparing handshake regression", () 
     await startDeviceInstance(instanceId);
     const ws = await server.waitForConnection();
     const frames: unknown[][] = [];
-    ws.on("message", (data) => frames.push(JSON.parse(data.toString())));
+    ws.on("message", (data) => {
+      const frame = JSON.parse(data.toString()) as unknown[];
+      frames.push(frame);
+      if (frame[0] === 2 && frame[2] === "Authorize") ws.send(JSON.stringify([3, frame[1], { idTagInfo: { status: "Accepted" } }]));
+    });
     ws.send(JSON.stringify([2, "start-timeout", "RemoteStartTransaction", { connectorId: 1, idTag: "REMOTE" }]));
     await expect.poll(async () => (await connector()).activeSession?.idTag).toBe("REMOTE");
     expect((await expire()).status).toBe("Available");

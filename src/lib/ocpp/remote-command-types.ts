@@ -134,6 +134,7 @@ export interface OcppLocalAuthListStore {
 }
 
 export interface RemoteCommandHandlersDeps {
+  onConfigurationChanged?: (key: string, value: string) => Promise<void>;
   /** Delegate the physical EV/authorization handshake to the device runtime. */
   prepareStart?: (connectorId: number, idTag: string) => Promise<boolean>;
   cancelStart?: (connectorId: number) => Promise<void>;

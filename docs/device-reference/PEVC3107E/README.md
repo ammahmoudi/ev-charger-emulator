@@ -61,3 +61,9 @@ No capture of the **Lock** bottom-nav screen exists in this manual — design it
 (per-connector lock/unlock, matching `UnlockConnector` handling).
 
 See this repo's issues for which screen feeds which build item.
+
+## OCPP traffic validation
+
+See the [2026-10-22 log audit](ocpp-log-audit-2026-10-22.md) for read-only real-device
+evidence, message ordering, the configuration empty-key bug, supported key mappings,
+read/change/read-back examples, and emulator/firmware differences.
