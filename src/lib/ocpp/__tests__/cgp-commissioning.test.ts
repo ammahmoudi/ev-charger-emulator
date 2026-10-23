@@ -10,8 +10,8 @@
  * Run: `npx vitest run src/lib/ocpp/__tests__/cgp-commissioning.test.ts`
  * Set CGP_EVIDENCE_OUT=<file> to write the evidence JSON (consumed by the adapter's capability PUT).
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 
@@ -21,7 +21,22 @@ import { MockCsmsServer } from "./mock-csms-server";
 
 const RATE_KW = 72; // 20 Wh/s: fast enough to measure in seconds, slow enough to sample
 const RATE_WH_PER_S = (RATE_KW * 1000) / 3600;
-const METER_INTERVAL_S = 1;
+function commissioningInterval(raw: string | undefined): 1 | 4 {
+  if (raw === undefined || raw === "1") return 1;
+  if (raw === "4") return 4;
+  throw new Error("CGP_COMMISSIONING_METER_INTERVAL_S must be exactly 1 or 4");
+}
+const METER_INTERVAL_S = commissioningInterval(process.env.CGP_COMMISSIONING_METER_INTERVAL_S);
+const evidenceOut = process.env.CGP_EVIDENCE_OUT;
+// The 4-second calibration always writes a new protected artifact, never the checked-in 1-second proof.
+const privateOutputFd = METER_INTERVAL_S === 4 ? (() => {
+  if (!evidenceOut || !isAbsolute(evidenceOut) || resolve(evidenceOut) !== evidenceOut) throw new Error("4-second calibration requires an absolute private CGP_EVIDENCE_OUT");
+  const parent = dirname(evidenceOut), stat = lstatSync(parent);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700 || realpathSync(parent) !== parent) throw new Error("Calibration parent must be an existing real mode0700 private directory");
+  const fd = openSync(evidenceOut, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  if ((fstatSync(fd).mode & 0o777) !== 0o600) { closeSync(fd); throw new Error("Calibration evidence must be mode0600"); }
+  return fd;
+})() : undefined;
 const TRIALS = 5;
 const REGISTER = "Energy.Active.Import.Register";
 
@@ -122,6 +137,11 @@ function whAt(samples: Array<{ at: number; wh: number }>, t: number): number {
   return b.wh + ((b.wh - a.wh) * (t - b.at)) / (b.at - a.at); // extrapolate at the latest measured rate
 }
 
+describe("CGP commissioning interval configuration", () => {
+  it.each([undefined, "1", "4"])("accepts only supported explicit cadence or default: %s", raw => expect(commissioningInterval(raw)).toBe(raw === "4" ? 4 : 1));
+  it.each(["", "0", "2", "04", "4.0", " 4", "4 "])("rejects invalid cadence %s", raw => expect(() => commissioningInterval(raw)).toThrow("exactly 1 or 4"));
+});
+
 describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
   let server: MockCsmsServer;
   let client: OcppClient;
@@ -149,8 +169,14 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
     session?.dispose();
     client?.disconnect();
     await server?.close();
-    if (process.env.CGP_EVIDENCE_OUT) {
-      const out = resolve(process.env.CGP_EVIDENCE_OUT);
+    if (privateOutputFd !== undefined) {
+      try {
+        const opened = fstatSync(privateOutputFd), entry = lstatSync(evidenceOut!);
+        if (!entry.isFile() || entry.isSymbolicLink() || opened.dev !== entry.dev || opened.ino !== entry.ino || (entry.mode & 0o777) !== 0o600) throw new Error("Calibration output identity changed");
+        writeFileSync(privateOutputFd, JSON.stringify(evidence, null, 2) + "\n");
+      } finally { closeSync(privateOutputFd); }
+    } else if (evidenceOut) {
+      const out = resolve(evidenceOut);
       mkdirSync(dirname(out), { recursive: true });
       writeFileSync(out, JSON.stringify(evidence, null, 2) + "\n");
     }
@@ -161,6 +187,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
     const res = r.payload as { configurationKey: Array<{ key: string; value: string; readonly: boolean }> };
     const byKey = Object.fromEntries(res.configurationKey.map((k) => [k.key, k.value]));
     evidence.reportedConfiguration = byKey;
+    expect(byKey.MeterValueSampleInterval).toBe(String(METER_INTERVAL_S));
     // The emulator advertises the local auth list profile, so it MUST report whether the list is enabled, and the Core keys.
     expect(byKey.SupportedFeatureProfiles).toContain("LocalAuthListManagement");
     expect(byKey.SupportedFeatureProfiles).not.toContain("AuthorizationCache");
@@ -179,7 +206,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
     expect((await csms.call("ChangeConfiguration", { key: "SomethingElse", value: "x" })).payload).toEqual({ status: "NotSupported" });
   });
 
-  const trials: Array<{ stopDelayMs: number; overshootWh: number; meterStartWh: number; meterStopWh: number; samples: number }> = [];
+  const trials: Array<{ stopDelayMs: number; overshootWh: number; meterStartWh: number; meterStopWh: number; samples: number; meterValueSamples: number; meterIntervalsMs: number[] }> = [];
 
   it(`measures stop delay and energy delivered after the stop request (${TRIALS} trials)`, async () => {
     for (let i = 0; i < TRIALS; i += 1) {
@@ -189,7 +216,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
       const startPayload = start.frame[3] as { meterStart: number };
       const txId = csms.issuedTx.get(start.frame[1] as string)!;
 
-      await sleep(3_300 + i * 250); // varied phase relative to the 1 s sample clock
+      await sleep((3_300 + i * 250) * METER_INTERVAL_S); // retain the measured phase and at least three real periodic samples
       const stopMark = csms.frames.length;
       const stop = await csms.call("RemoteStopTransaction", { transactionId: txId });
       expect(stop.payload).toEqual({ status: "Accepted" });
@@ -197,6 +224,10 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
       const meterStopWh = (stopped.frame[3] as { meterStop: number }).meterStop;
 
       const samples = csms.frames.slice(mark).filter((f) => f.frame[2] === "MeterValues").map((f) => registerOf(f.frame)).filter((s): s is { at: number; wh: number } => s !== null);
+      const meterValueSamples = samples.length;
+      expect(meterValueSamples).toBeGreaterThanOrEqual(3);
+      const meterIntervalsMs = samples.slice(1).map((sample, index) => sample.at - samples[index]!.at);
+      expect(meterIntervalsMs.every(interval => Number.isFinite(interval) && interval > 0)).toBe(true);
       samples.unshift({ at: start.at, wh: startPayload.meterStart });
       const regAtRequest = whAt(samples, stop.sentAt);
       trials.push({
@@ -205,6 +236,8 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
         meterStartWh: startPayload.meterStart,
         meterStopWh,
         samples: samples.length,
+        meterValueSamples,
+        meterIntervalsMs,
       });
       await sleep(300);
     }
@@ -224,9 +257,9 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
       // exactly the body fields of PUT /v1/charging/enforcement-capabilities/:stationMappingId (tenantId/dates/evidenceRef added by the operator)
       capability: { mode: "REACTIVE_MEASURED", overshootWh, stopDelayMs: Math.max(stopDelayMs, 100), meterIntervalSeconds: METER_INTERVAL_S, maxMeterStalenessSeconds: 5 * METER_INTERVAL_S },
     };
-    // With a 1 s sample clock at 20 Wh/s the interpolation error alone is bounded; overshoot must be small and finite.
+    // With this measured sample clock at 20 Wh/s the interpolation error alone is bounded; overshoot must be small and finite.
     expect(overshootWh).toBeLessThan(RATE_WH_PER_S * 2);
-  }, 60_000);
+  }, 60_000 * METER_INTERVAL_S);
 
   const adapterLogic = resolve(__dirname, "../../../../../citrineos-adapter/src/charging-enforcement/enforcement.logic.ts");
 
@@ -285,7 +318,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
       // control: left alone this charger would have gone far past the envelope (the bound is real, not vacuous)
       expect(RATE_WH_PER_S * 30).toBeGreaterThan(MAX_WH * 1.5);
     },
-    90_000,
+    90_000 * METER_INTERVAL_S,
   );
 
   it("a stale meter (no samples) is detected by the adapter's decide(): the session is stopped even with energy far from the bound", async () => {
