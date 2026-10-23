@@ -206,7 +206,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
     expect((await csms.call("ChangeConfiguration", { key: "SomethingElse", value: "x" })).payload).toEqual({ status: "NotSupported" });
   });
 
-  const trials: Array<{ stopDelayMs: number; overshootWh: number; meterStartWh: number; meterStopWh: number; samples: number; meterValueSamples: number; meterIntervalsMs: number[] }> = [];
+  const trials: Array<{ stopDelayMs: number; overshootWh: number; meterStartWh: number; meterStopWh: number; samples: number; meterValueSamples: number; sampleIntervalsMs: number[] }> = [];
 
   it(`measures stop delay and energy delivered after the stop request (${TRIALS} trials)`, async () => {
     for (let i = 0; i < TRIALS; i += 1) {
@@ -226,8 +226,9 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
       const samples = csms.frames.slice(mark).filter((f) => f.frame[2] === "MeterValues").map((f) => registerOf(f.frame)).filter((s): s is { at: number; wh: number } => s !== null);
       const meterValueSamples = samples.length;
       expect(meterValueSamples).toBeGreaterThanOrEqual(3);
-      const meterIntervalsMs = samples.slice(1).map((sample, index) => sample.at - samples[index]!.at);
-      expect(meterIntervalsMs.every(interval => Number.isFinite(interval) && interval > 0)).toBe(true);
+      const sampleIntervalsMs = samples.slice(1).map((sample, index) => sample.at - samples[index]!.at);
+      expect(sampleIntervalsMs.every(interval => Number.isFinite(interval) && interval > 0)).toBe(true);
+      if (METER_INTERVAL_S === 4) expect(sampleIntervalsMs.every(interval => interval >= 3_999 && interval <= 20_000)).toBe(true);
       samples.unshift({ at: start.at, wh: startPayload.meterStart });
       const regAtRequest = whAt(samples, stop.sentAt);
       trials.push({
@@ -237,7 +238,7 @@ describe("CGP commissioning / overshoot over the OCPP 1.6J wire", () => {
         meterStopWh,
         samples: samples.length,
         meterValueSamples,
-        meterIntervalsMs,
+        sampleIntervalsMs,
       });
       await sleep(300);
     }
