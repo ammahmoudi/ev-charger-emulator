@@ -12,10 +12,10 @@ function config(env){
  const interval=Number(env.CGP_BENCH_METER_INTERVAL_S??1);requireOk(interval===1,'NATIVE_BENCH_EXPLICIT_1_SECOND_ONLY');
  const directory=env.CGP_BENCH_EVIDENCE_DIR;requireOk(path.isAbsolute(directory??''),'PRIVATE_EVIDENCE_DIRECTORY_REQUIRED');
  const stat=fs.lstatSync(directory);requireOk(stat.isDirectory()&&!stat.isSymbolicLink()&&(stat.mode&0o777)===0o700&&fs.realpathSync(directory)===directory,'REAL_PRIVATE_0700_DIRECTORY_REQUIRED');
- requireOk(/^[a-f0-9]{40}$/.test(env.CGP_BENCH_NATIVE_SOURCE_COMMIT??''),'NATIVE_SOURCE_COMMIT_REQUIRED');
+ requireOk(env.CGP_BENCH_NATIVE_SOURCE_COMMIT==='UNKNOWN'||/^[a-f0-9]{40}$/.test(env.CGP_BENCH_NATIVE_SOURCE_COMMIT??''),'EXPLICIT_NATIVE_SOURCE_OR_UNKNOWN_REQUIRED');
  requireOk(/^sha256:[a-f0-9]{64}$/.test(env.CGP_BENCH_NATIVE_IMAGE_ID??''),'NATIVE_IMAGE_ID_REQUIRED');
  requireOk(Boolean(env.CGP_BENCH_NEW_INSTANCE_ID)&&Boolean(env.CGP_BENCH_MODEL_ID),'NEW_INSTANCE_MODEL_BINDING_REQUIRED');
- return{identity,tag,nonce,token,txBase,port,interval,directory,sourceCommit:env.CGP_BENCH_NATIVE_SOURCE_COMMIT,imageId:env.CGP_BENCH_NATIVE_IMAGE_ID,instanceId:env.CGP_BENCH_NEW_INSTANCE_ID,modelId:env.CGP_BENCH_MODEL_ID};
+ return{identity,tag,nonce,token,txBase,port,interval,directory,sourceCommit:env.CGP_BENCH_NATIVE_SOURCE_COMMIT==='UNKNOWN'?null:env.CGP_BENCH_NATIVE_SOURCE_COMMIT,imageId:env.CGP_BENCH_NATIVE_IMAGE_ID,instanceId:env.CGP_BENCH_NEW_INSTANCE_ID,modelId:env.CGP_BENCH_MODEL_ID};
 }
 class Bench{
  constructor(options,{WebSocketServer,now=()=>Date.now(),mono=()=>Number(process.hrtime.bigint())/1e6}={}){
