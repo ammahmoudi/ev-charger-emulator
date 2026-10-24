@@ -5,6 +5,8 @@ const requireOk=(value,code)=>{if(!value)throw Error(code);};
 function config(env){
  const identity=env.CGP_BENCH_IDENTITY,tag=env.CGP_BENCH_ID_TAG,nonce=env.CGP_BENCH_NONCE,token=env.CGP_BENCH_CONTROL_TOKEN;
  requireOk(/^[A-Za-z0-9_-]{16,100}$/.test(identity??''),'EXPLICIT_NEW_IDENTITY_REQUIRED');
+ // This emulator reports its connection identity as the OCPP1.6 Boot serial (maxLength25).
+ requireOk(identity.length<=25,'OCPP16_BOOT_SERIAL_TOO_LONG');
  requireOk(/^BENCH-[a-f0-9]{12,14}$/.test(tag??''),'UNASSIGNED_BENCH_TAG_REQUIRED');
  requireOk(/^[a-f0-9]{32}$/.test(nonce??'')&&/^[a-f0-9]{64}$/.test(token??''),'PRIVATE_NONCE_AND_CONTROL_TOKEN_REQUIRED');
  const txBase=Number(env.CGP_BENCH_TX_BASE);requireOk(Number.isInteger(txBase)&&txBase>=1900000000&&txBase<=2100000000,'HIGH_DISTINCT_INT32_BASE_REQUIRED');
@@ -72,7 +74,7 @@ class Bench{
  send(frame){requireOk(this.ws?.readyState===1,'SOCKET_NOT_OPEN');this.record('CSMS_TO_NATIVE',frame);this.ws.send(JSON.stringify(frame));}
  receive(frame){if(this.receipt)return;requireOk(Array.isArray(frame)&&[2,3,4].includes(frame[0])&&typeof frame[1]==='string','MALFORMED_OCPP_FRAME');const row=this.record('NATIVE_TO_CSMS',frame);
   if(frame[0]===2){const[,id,action,p]=frame;requireOk(p&&typeof p==='object','MALFORMED_CALL');let response={};
-   if(action==='BootNotification'){requireOk(this.state==='WAITING_FOR_BOOT'&&p.chargePointSerialNumber===this.c.identity,'BOOT_SUBJECT_MISMATCH');this.boot=p;this.state='READY';response={status:'Accepted',currentTime:new Date(this.now()).toISOString(),interval:300};}
+   if(action==='BootNotification'){requireOk(typeof p.chargePointSerialNumber==='string'&&p.chargePointSerialNumber.length<=25,'OCPP16_BOOT_SERIAL_TOO_LONG');requireOk(this.state==='WAITING_FOR_BOOT'&&p.chargePointSerialNumber===this.c.identity,'BOOT_SUBJECT_MISMATCH');this.boot=p;this.state='READY';response={status:'Accepted',currentTime:new Date(this.now()).toISOString(),interval:300};}
    else{requireOk(this.boot,'BOOT_REQUIRED');
     if(action==='Heartbeat')response={currentTime:new Date(this.now()).toISOString()};
     else if(action==='StatusNotification'){} // Actual runtime status, retained in raw evidence.

@@ -51,3 +51,15 @@ test('real Finishing hold beyond five seconds settles within separate15s readonl
  try{await prepareOwnedEv(c,2,{record:x=>rows.push(x),fetchImpl:async(_u,o)=>{if(o.method==='GET'){const idle=performance.now()-started>=5100;return new Response(JSON.stringify({connectors:[{connectorId:1,status:idle?'Available':'Finishing',locked:!idle,evConnected:true,activeSession:null}]}));}assert.ok(performance.now()-started>=5100);posts++;const on=JSON.parse(o.body).connected;return new Response(JSON.stringify({connector:{connectorId:1,status:on?'Preparing':'Available',locked:false,evConnected:on,activeSession:null}}));}});assert.equal(posts,2);const ready=rows.find(x=>x.action==='VERIFY_INACTIVE'&&x.phase==='RESPONSE');assert.ok(ready.settleElapsedMs>=5100);assert.equal(ready.idleSettleBudgetMs,15000);assert.ok(rows.filter(x=>x.phase==='OBSERVATION'&&x.connector.locked).length>1);}finally{fs.rmSync(c.directory,{recursive:true});}
 });
 test('new plug cycle cannot inherit15s idle allowance or mutate after its own5s deadline',async()=>{const c=fixture();let at=0;const posts=[];try{await assert.rejects(prepareOwnedEv(c,2,{clock:()=>at,fetchImpl:async(_u,o)=>{if(o.method==='GET')return new Response(JSON.stringify({connectors:[{connectorId:1,status:'Available',locked:false,evConnected:true,activeSession:null}]}));posts.push(JSON.parse(o.body).connected);at+=5100;return new Response(JSON.stringify({connector:{connectorId:1,status:'Available',locked:false,evConnected:false,activeSession:null}}));}}),/OWNED_EV_HTTP_DEADLINE/);assert.deepEqual(posts,[false]);}finally{fs.rmSync(c.directory,{recursive:true});}});
+
+test('preflight rejects the actual 27-character Boot serial while accepting the OCPP1.6 25-character boundary',()=>{
+ const c=fixture();try{
+ const env={CGP_BENCH_IDENTITY:'A'.repeat(25),CGP_BENCH_ID_TAG:c.tag,CGP_BENCH_NONCE:c.nonce,CGP_BENCH_CONTROL_TOKEN:c.token,CGP_BENCH_TX_BASE:String(c.txBase),CGP_BENCH_EVIDENCE_DIR:c.directory,CGP_BENCH_NATIVE_SOURCE_COMMIT:'UNKNOWN',CGP_BENCH_NATIVE_IMAGE_ID:c.imageId,CGP_BENCH_NEW_INSTANCE_ID:c.instanceId,CGP_BENCH_MODEL_ID:c.modelId,CGP_BENCH_EMULATOR_BASE_URL:c.emulatorBaseUrl,CGP_BENCH_EMULATOR_APP_NAME:c.emulatorAppName};
+ assert.equal(config(env).identity.length,25);
+ assert.throws(()=>config({...env,CGP_BENCH_IDENTITY:'A'.repeat(26)}),/OCPP16_BOOT_SERIAL_TOO_LONG/);
+ assert.throws(()=>config({...env,CGP_BENCH_IDENTITY:'CGPDEV20261024_4e3efc218676'}),/OCPP16_BOOT_SERIAL_TOO_LONG/);
+ }finally{fs.rmSync(c.directory,{recursive:true});}
+});
+test('wire bench never accepts an oversized native Boot serial even if construction bypassed config',async()=>{
+ const f=await setup();try{f.bench.c.identity='CGPDEV20261024_4e3efc218676';assert.throws(()=>f.bench.receive([2,'invalid-boot','BootNotification',{chargePointSerialNumber:f.bench.c.identity}]),/OCPP16_BOOT_SERIAL_TOO_LONG/);assert.equal(f.bench.state,'WAITING_FOR_BOOT');assert.equal(f.bench.boot,undefined);assert.equal(f.bench.trials.length,0);}finally{await f.cleanup();}
+});
