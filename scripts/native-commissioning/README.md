@@ -56,3 +56,17 @@ The existing commissioning unit uses an in-memory configuration store. This harn
 ## Local source checks
 
 `node --check scripts/native-commissioning/bench.cjs` and `node --test scripts/native-commissioning/bench.test.cjs` (existing `ws` dependency required). Tests use an isolated local fake wire peer only to validate the bench protocol/guards; they are not native commissioning evidence.
+
+## Physical EV handshake between trials
+
+The owned native artifact completed one real trial in attempt002, then timed out after a second Authorize without a StartTransaction. A later owned connector read showed `Available`, `evConnected:true`, no active session. This does **not** prove automatic unplug or a definitive product defect; the artifact's source revision is unknown. An idempotent `{connected:true}` had also returned `Available`, so that call alone does not establish a fresh preparing handshake.
+
+The bench now requires `CGP_BENCH_EMULATOR_APP_NAME` (the verified private emulator application DNS name) and `CGP_BENCH_EMULATOR_BASE_URL=http://<that exact name>:3000`. No public hostname, redirect, credentials, alternative instance or arbitrary endpoint is accepted. Before **each** RemoteStart, with no bench active transaction or pending start, it performs the normal owned-instance API sequence:
+
+1. GET `/api/device-instances/<exact bound instanceId>/connectors`; require connector1 uniquely present, unlocked and inactive.
+2. POST that instance's `/connectors/1/ev` with `{connected:false}`; require HTTP200, `Available`, EVfalse, unlocked and no active session.
+3. POST the same endpoint with `{connected:true}`; require HTTP200, `Preparing`, EVtrue, unlocked and no active session.
+
+A shared five-second deadline, strict connector responses and redirect rejection cover the complete cycle. Any failure stops before RemoteStart; there is no local session start/stop, master tag, Core or admission call. These are real physical plug-control actions for the isolated simulator, not synthesized OCPP observations. The five RemoteStop timing measurements remain unchanged.
+
+Actual HTTP request/status/acknowledgement evidence is stored separately in `<nonce>.http-actions.jsonl`, included by hash in the receipt/evidence. OCPP raw frames remain actual wire traffic only. After a failed native run, root retains all evidence and actual failed child exit; a future attempt needs a fresh nonce and unassigned tag/unused transaction range, because completed trials remain real native emulator history.
