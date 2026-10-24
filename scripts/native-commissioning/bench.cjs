@@ -25,7 +25,7 @@ function validateEmulatorUrl(base,appName){
 async function prepareOwnedEv(c,trial,{fetchImpl=fetch,record=()=>{}}={}){
  validateEmulatorUrl(c.emulatorBaseUrl,c.emulatorAppName);requireOk(typeof c.instanceId==='string'&&c.instanceId.length>0,'OWNED_INSTANCE_REQUIRED');
  const root='/api/device-instances/'+encodeURIComponent(c.instanceId)+'/connectors';
- const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),5000);
+ const controller=new AbortController();const deadline=Date.now()+5000;const timer=setTimeout(()=>controller.abort(),5000);let phase='VERIFY_INACTIVE';
  async function request(action,method,endpoint,body){
   record({trial,action,phase:'REQUEST',method,path:endpoint,...(body?{body}:{}),requestedAt:new Date().toISOString()});
   const response=await fetchImpl(new URL(endpoint,c.emulatorBaseUrl),{method,redirect:'error',headers:{'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:controller.signal});
@@ -34,11 +34,21 @@ async function prepareOwnedEv(c,trial,{fetchImpl=fetch,record=()=>{}}={}){
  }
  function ready(v,status){requireOk(v&&v.connectorId===1&&v.evConnected===(status==='Preparing')&&v.locked===false&&v.activeSession===null&&v.status===status,'OWNED_EV_CONNECTOR_NOT_READY');}
  try{
-  const before=await request('VERIFY_INACTIVE','GET',root);requireOk(Array.isArray(before.connectors),'OWNED_CONNECTOR_LIST_REQUIRED');const matches=before.connectors.filter(v=>v.connectorId===1);requireOk(matches.length===1,'OWNED_CONNECTOR_NOT_UNIQUE');const v=matches[0];requireOk(v.activeSession===null&&v.locked===false&&['Available','Preparing'].includes(v.status),'OWNED_CONNECTOR_NOT_INACTIVE');
-  record({trial,action:'VERIFY_INACTIVE',phase:'RESPONSE',httpStatus:200,connector:{connectorId:1,status:v.status,evConnected:v.evConnected,locked:false,activeSession:null},receivedAt:new Date().toISOString()});
+  let observation=0;
+  while(true){
+   const before=await request('VERIFY_INACTIVE','GET',root);requireOk(Array.isArray(before.connectors),'OWNED_CONNECTOR_LIST_REQUIRED');const matches=before.connectors.filter(v=>v.connectorId===1);
+   const v=matches.length===1?matches[0]:null;
+   record({trial,action:'VERIFY_INACTIVE',phase:'OBSERVATION',observation:++observation,matchingConnectors:matches.length,...(v?{connector:{connectorId:1,status:typeof v.status==='string'?v.status:null,evConnected:typeof v.evConnected==='boolean'?v.evConnected:null,locked:typeof v.locked==='boolean'?v.locked:null,activeSessionPresent:v.activeSession!==null}}:{}),observedAt:new Date().toISOString()});
+   requireOk(matches.length===1,'OWNED_CONNECTOR_NOT_UNIQUE');requireOk(typeof v.status==='string'&&typeof v.locked==='boolean'&&typeof v.evConnected==='boolean'&&Object.hasOwn(v,'activeSession'),'OWNED_CONNECTOR_RESPONSE_INVALID');
+   if(v.activeSession===null&&v.locked===false&&['Available','Preparing'].includes(v.status)){
+    record({trial,action:'VERIFY_INACTIVE',phase:'RESPONSE',httpStatus:200,connector:{connectorId:1,status:v.status,evConnected:v.evConnected,locked:false,activeSession:null},receivedAt:new Date().toISOString()});break;
+   }
+   requireOk(Date.now()<deadline&&!controller.signal.aborted,'OWNED_EV_IDLE_DEADLINE');await new Promise(resolve=>setTimeout(resolve,100));requireOk(Date.now()<deadline&&!controller.signal.aborted,'OWNED_EV_IDLE_DEADLINE');
+  }
+  phase='UNPLUG';
   const off=await request('UNPLUG','POST',root+'/1/ev',{connected:false});ready(off.connector,'Available');record({trial,action:'UNPLUG',phase:'RESPONSE',httpStatus:200,connector:{connectorId:1,status:'Available',evConnected:false,locked:false,activeSession:null},receivedAt:new Date().toISOString()});
-  const on=await request('PLUG','POST',root+'/1/ev',{connected:true});ready(on.connector,'Preparing');record({trial,action:'PLUG',phase:'RESPONSE',httpStatus:200,connector:{connectorId:1,status:'Preparing',evConnected:true,locked:false,activeSession:null},receivedAt:new Date().toISOString()});
- }catch(e){record({trial,phase:'ERROR',code:controller.signal.aborted?'OWNED_EV_TIMEOUT':'OWNED_EV_PREPARATION_FAILED',failedAt:new Date().toISOString()});throw Error(controller.signal.aborted?'OWNED_EV_TIMEOUT':'OWNED_EV_PREPARATION_FAILED');}finally{clearTimeout(timer);}
+  phase='PLUG';const on=await request('PLUG','POST',root+'/1/ev',{connected:true});ready(on.connector,'Preparing');record({trial,action:'PLUG',phase:'RESPONSE',httpStatus:200,connector:{connectorId:1,status:'Preparing',evConnected:true,locked:false,activeSession:null},receivedAt:new Date().toISOString()});
+ }catch(e){const code=controller.signal.aborted?(phase==='VERIFY_INACTIVE'?'OWNED_EV_IDLE_DEADLINE':'OWNED_EV_HTTP_DEADLINE'):/^OWNED_[A-Z0-9_]+$/.test(e.message)?e.message:'OWNED_EV_HTTP_FAILED';record({trial,action:phase,phase:'ERROR',code,failedAt:new Date().toISOString()});throw Error(code);}finally{clearTimeout(timer);}
 }
 class Bench{
  constructor(options,{WebSocketServer,prepareEv,now=()=>Date.now(),mono=()=>Number(process.hrtime.bigint())/1e6}={}){
