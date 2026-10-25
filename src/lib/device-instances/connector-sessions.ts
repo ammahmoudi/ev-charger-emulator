@@ -8,7 +8,7 @@ import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { isHardwareTestOutputRunning } from "@/lib/device-instances/hardware-test-state";
 import { queueOutboxMessage } from "@/lib/device-instances/outbox";
 import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
-import { isFaultStopCause } from "@/lib/device-instances/stop-causes";
+import { isFaultStopCause, toOcpp16StopReason } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
 const WH_PER_KWH = 1000;
@@ -901,7 +901,7 @@ export async function stopChargingSession(
       transactionId: state.activeTransactionId,
       meterStop,
       timestamp: stoppedAt.toISOString(),
-      reason: options.stopCause,
+      reason: toOcpp16StopReason(options.stopCause),
     };
     try {
       await callOcpp(deviceInstanceId, "StopTransaction", stopTransactionPayload);

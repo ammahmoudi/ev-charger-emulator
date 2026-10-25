@@ -1,6 +1,7 @@
 import { Prisma, type OutboxAction } from "@prisma/client";
 
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
+import { normalizeOcpp16StopPayload } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -65,7 +66,12 @@ export async function drainOutbox(
 
   for (const message of pending) {
     try {
-      await sender(message.action, message.payload);
+      // Previously retained device labels such as "Manu. Stop" are not OCPP enum values.
+      // Keep the original physical stop evidence and remove the row only after CSMS accepts it.
+      const payload = message.action === "StopTransaction"
+        ? normalizeOcpp16StopPayload(message.payload)
+        : message.payload;
+      await sender(message.action, payload);
       await prisma.deviceInstanceOutboxMessage.delete({ where: { id: message.id } });
       await logDeviceInstanceEvent(deviceInstanceId, "REMOTE_COMMAND", `Delivered queued ${message.action} to CSMS`);
       delivered += 1;

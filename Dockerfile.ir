@@ -39,6 +39,8 @@ CMD ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed"]
 FROM ${NODE_IMAGE} AS runtime
 ARG VERSION
 ARG BUILD_DATE
+ARG COMMIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$COMMIT_SHA
 LABEL org.opencontainers.image.version="${VERSION:-latest}"
 LABEL org.opencontainers.image.created="${BUILD_DATE:-unknown}"
 ENV NODE_ENV=production
