@@ -27,6 +27,8 @@ CMD ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed"]
 # Minimal production runtime: just the traced `next build` standalone server, no
 # devDependencies, no Prisma CLI, no app source.
 FROM base AS runner
+ARG COMMIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$COMMIT_SHA
 ENV NODE_ENV=production
 RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

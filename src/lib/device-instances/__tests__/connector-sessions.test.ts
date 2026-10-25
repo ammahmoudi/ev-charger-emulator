@@ -477,7 +477,7 @@ describe.skipIf(!process.env.DATABASE_URL)("connector-sessions reporting to a co
     const stopPromise = stopChargingSession(instanceId, 1, { stopCause: "Manu. Stop" });
     const [, stopId, stopAction, stopPayload] = await queue.next();
     expect(stopAction).toBe("StopTransaction");
-    expect(stopPayload).toMatchObject({ transactionId: 901 });
+    expect(stopPayload).toMatchObject({ transactionId: 901, reason: "Local" });
     // meterStop must be the *absolute* register (baseline 5000 + this transaction's own small
     // delta), never just the delta alone — CitrineOS computes totalKwh = meterStop - meterStart,
     // so a bare delta here would make it come out negative.
