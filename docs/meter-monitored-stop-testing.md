@@ -1,0 +1,9 @@
+# Delayed RemoteStop testing
+
+`registerRemoteCommandHandlers` accepts the optional bounded test hook `remoteStopDelayMs` (integer0..60000ms, default0). An accepted RemoteStop is acknowledged immediately. The active transaction and its one meter loop keep running until the delay elapses; the actual StopTransaction uses the final cumulative register and one shared end timestamp. Repeated requests for the same active transaction reuse that stop obligation and do not restart the delay or emit duplicate ends. Dispose cancels pending stop timers; Reset stops once through the same transaction guard.
+
+This hook belongs to the existing native OCPP simulator. It adds no service, admin page, database or charging permission. Do not treat command ACK as proof of physical completion. Default stopping remains immediate; finishingHoldMs still controls only the later Finishing→Available status delay.
+
+The in-memory configuration store now honestly advertises GetConfigurationMaxKeys10, LocalAuthorizeOfflinefalse and AuthorizeRemoteTxRequestsfalse (matching its existing default remote-start behavior). The persisted real device runtime continues to use its configured server-authorization setting. Missing cache keys remain unknown rather than being invented from feature-profile names.
+
+Tests: `npx vitest run src/lib/ocpp/__tests__/delayed-remote-stop.test.ts src/lib/ocpp/__tests__/remote-commands.test.ts`. They exercise native WebSocket ACK/end separation, final meter accumulation, continued periodic metering, duplicate requests, disposal, default immediate stop and invalid bounds. The Adapter's matching PostgreSQL+native-wire harness tests actual quota stopping without commissioning prerequisites and retains final delivered energy above the observed threshold. These local suites are not complete DEV owner/financial acceptance and do not certify physical hardware.
