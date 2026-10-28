@@ -1,0 +1,4 @@
+{
+  "type": "minor",
+  "summary": "Add a bounded native RemoteStop delay hook with immediate acknowledgement, continued metering and one actual end after duplicate requests."
+}

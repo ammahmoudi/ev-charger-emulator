@@ -67,6 +67,12 @@ export function registerRemoteCommandHandlers(
   const diagnosticsUploadDelayMs = deps.diagnosticsUploadDelayMs ?? DEFAULT_DIAGNOSTICS_UPLOAD_DELAY_MS;
   const simulatedChargeRateKwFallback = deps.simulatedChargeRateKw ?? DEFAULT_SIMULATED_CHARGE_RATE_KW;
   const finishingHoldMs = deps.finishingHoldMs ?? 0;
+  const remoteStopDelayMs = deps.remoteStopDelayMs ?? 0;
+  if (!Number.isInteger(remoteStopDelayMs) || remoteStopDelayMs < 0 || remoteStopDelayMs > 60_000)
+    throw new RangeError("remoteStopDelayMs must be an integer from 0 to 60000");
+  let disposed = false;
+  const pendingStopTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  const stoppingTransactions = new Set<number>();
   const onError = deps.onError ?? (() => {});
 
   const activeTransactions = new Map<number, OcppActiveTransaction>();
@@ -444,6 +450,12 @@ export function registerRemoteCommandHandlers(
   }
 
   async function stopTransaction(entry: OcppActiveTransaction, reason: string): Promise<void> {
+    if (disposed || stoppingTransactions.has(entry.transactionId) || activeTransactions.get(entry.connectorId)?.transactionId !== entry.transactionId) return;
+    stoppingTransactions.add(entry.transactionId);
+    const pending = pendingStopTimers.get(entry.transactionId);
+    if (pending) clearTimeout(pending);
+    pendingStopTimers.delete(entry.transactionId);
+    const stoppedAtMs = Date.now();
     activeTransactions.delete(entry.connectorId);
     stopMeterValuesLoop(entry.connectorId);
     // Captured before the delete below — this transaction's own starting register value, needed
@@ -452,6 +464,7 @@ export function registerRemoteCommandHandlers(
     const { sampledValue: finalSampledValue, meterWh: meterStopWh } = await buildSampledValues(
       entry.connectorId,
       "Transaction.End",
+      stoppedAtMs,
     );
     meterRegisterWh.set(entry.connectorId, meterStopWh);
     transactionSimState.delete(entry.connectorId);
@@ -461,14 +474,15 @@ export function registerRemoteCommandHandlers(
         transactionId: entry.transactionId,
         idTag: entry.idTag,
         meterStop: meterStopWh,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date(stoppedAtMs).toISOString(),
         reason,
-        transactionData: [{ timestamp: new Date().toISOString(), sampledValue: finalSampledValue }],
+        transactionData: [{ timestamp: new Date(stoppedAtMs).toISOString(), sampledValue: finalSampledValue }],
       });
     } catch (err) {
       onError(toError(err));
     }
 
+    if (disposed) { stoppingTransactions.delete(entry.transactionId); return; }
     session.setConnectorStatus(entry.connectorId, "Finishing");
     // Only the local status flip is delayed — the StopTransaction call above already happened
     // immediately, and the mirroring hook below fires right away too (the persisted side, if
@@ -500,6 +514,7 @@ export function registerRemoteCommandHandlers(
         onError(toError(err));
       }
     }
+    stoppingTransactions.delete(entry.transactionId);
   }
 
   async function handleRemoteStopTransaction(payload: Record<string, unknown>): Promise<{ status: "Accepted" | "Rejected" }> {
@@ -510,10 +525,21 @@ export function registerRemoteCommandHandlers(
 
     const entry = Array.from(activeTransactions.values()).find((t) => t.transactionId === transactionId);
     if (!entry) {
+      if (stoppingTransactions.has(transactionId)) return { status: "Accepted" };
       return { status: deps.requestStop && await deps.requestStop(transactionId) ? "Accepted" : "Rejected" };
     }
 
-    setImmediate(() => void stopTransaction(entry, "Remote"));
+    // ACK is not a physical end. Keep the meter loop and active transaction through the bounded delay.
+    if (!pendingStopTimers.has(transactionId)) {
+      const timer = setTimeout(() => {
+        pendingStopTimers.delete(transactionId);
+        void stopTransaction(entry, "Remote").catch(err => {
+          stoppingTransactions.delete(transactionId);
+          onError(toError(err));
+        });
+      }, remoteStopDelayMs);
+      pendingStopTimers.set(transactionId, timer);
+    }
     return { status: "Accepted" };
   }
 
@@ -751,6 +777,9 @@ export function registerRemoteCommandHandlers(
     getLocalAuthListVersion: () => localAuthListHandlers.getVersion(),
     listLocalAuthListEntries: () => localAuthListHandlers.listEntries(),
     dispose(): void {
+      disposed = true;
+      for (const timer of pendingStopTimers.values()) clearTimeout(timer);
+      pendingStopTimers.clear();
       for (const connectorId of pendingStarts) {
         void deps.cancelStart?.(connectorId).catch((err) => onError(toError(err)));
       }
