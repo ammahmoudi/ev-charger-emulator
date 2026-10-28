@@ -13,6 +13,7 @@ import {createRfidDenialProbe} from './cgp-rfid-denial-probe';
  *
  * Env: OCPP_URL (wss://csms.example.invalid/<stationId>), ID_TAG, CONNECTOR_ID=1, CHARGE_RATE_KW=22, METER_INTERVAL_S=2,
  *      MAX_SECONDS=300, STOP_AFTER_S (optional local stop), EVIDENCE_OUT.
+ *      CGP_REMOTE_STOP_DELAY_MS (APP-only, bounded native physical-stop delay).
  * Exit: 0 confirmed remote stop; local stop/max time fail; 1 error; 3 start refused by the CSMS.
  */
 import {headlessConnectors} from './cgp-connectors';
@@ -28,6 +29,8 @@ if (!inputUrl || !inputIdTag) { console.error("NOT RUN: OCPP_URL and ID_TAG are 
 const url = inputUrl;
 const idTag = inputIdTag;
 const source = process.env.SESSION_SOURCE ?? "RFID";
+const remoteStopDelayMs = process.env.CGP_REMOTE_STOP_DELAY_MS === undefined ? undefined : Number(process.env.CGP_REMOTE_STOP_DELAY_MS);
+if (remoteStopDelayMs !== undefined && (source !== 'APP' || !Number.isInteger(remoteStopDelayMs) || remoteStopDelayMs < 0 || remoteStopDelayMs > 60_000)) throw new Error('Bounded remote stop delay requires an APP fixture');
 const preadmit=process.env.CGP_APP_PRE_ADMIT_RECOVERY==='1';
 if(process.env.CGP_APP_PRE_ADMIT_RECOVERY!==undefined&&(!preadmit||source!=='APP'||process.env.CGP_SEQUENTIAL_APP!==undefined||process.env.CGP_CONNECTOR_IDS!==undefined))throw Error('exclusive single-target APP no-start fixture required');
 const sequential=process.env.CGP_SEQUENTIAL_APP==='1';
@@ -77,7 +80,7 @@ const rawRegister = client.registerHandler.bind(client);
 
 const session = new OcppChargePointSession(client, { identity: { chargePointVendor: "EVYAR-EMU", chargePointModel: "cgp-headless" }, connectors: connectorIds.map(id=>({connectorId:id,label:`Plug ${id}`})) });
 session.on("error", () => {});
-const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0, calendarMeterBoundaryAt: process.env.CGP_METER_BOUNDARY_AT,
+const controller = registerRemoteCommandHandlers(client, session, { configStore: config, simulatedChargeRateKw: rateKw, finishingHoldMs: 0, calendarMeterBoundaryAt: process.env.CGP_METER_BOUNDARY_AT, remoteStopDelayMs,
   onRemoteTransactionStarted: (_connector, info) => {
     if (source !== "APP") return;
     if(_connector!==connectorId){unexpectedTransactions.push({connectorId:_connector,transactionId:info.transactionId});return;}
