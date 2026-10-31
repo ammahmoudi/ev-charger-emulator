@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { createTestModelAndInstance, deleteTestDeviceModel } from "./test-helpers";
 import { connectEv, listConnectorStates, startChargingSession, stopChargingSession } from "../connector-sessions";
 import { disposeDeviceInstance, startDeviceInstance } from "../runtime";
+import { presentRfidCard } from "../rfid";
 import { PrismaConfigurationStore } from "../prisma-configuration-store";
 
 describe.skipIf(!process.env.DATABASE_URL)("configuration and status on the real OCPP wire", () => {
@@ -88,12 +89,17 @@ describe.skipIf(!process.env.DATABASE_URL)("configuration and status on the real
     expect(statuses().filter((s) => s.connectorId === 1).at(-1)?.status).toBe("Preparing");
     expect(frames.some((f) => f[2] === "StartTransaction")).toBe(false);
   });
-  it("reports persisted Preparing on boot instead of a false Available status", async () => {
+  it.each([0, 90_000])("reports cable-first Preparing aged %i ms on cold boot instead of false Available", async (ageMs) => {
     await setup(async () => {
       await connectEv(instanceId, 1);
+      await prisma.deviceInstanceConnectorState.update({
+        where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
+        data: { preparingSince: new Date(Date.now() - ageMs) },
+      });
       disposeDeviceInstance(instanceId);
     });
     expect(statuses().find((s) => s.connectorId === 1)?.status).toBe("Preparing");
+    expect(frames.some((f) => f[2] === "StartTransaction")).toBe(false);
   });
   it("keeps local charging in Preparing until StartTransaction is accepted", async () => {
     await setup();
@@ -141,9 +147,9 @@ describe.skipIf(!process.env.DATABASE_URL)("configuration and status on the real
     expect(statuses().some((entry) => entry.status === "Charging")).toBe(false);
     expect(await prisma.deviceInstanceEvent.count({ where: { deviceInstanceId: instanceId, type: "TRANSACTION_STARTED" } })).toBe(0);
   });
-  it("expires persisted old Preparing before the initial boot status sweep", async () => {
+  it("expires old authorization-first Preparing without an EV before the boot status sweep", async () => {
     await setup(async () => {
-      await connectEv(instanceId, 1);
+      await presentRfidCard(instanceId, 1, "MASTER-TEST", 20);
       await prisma.deviceInstanceConnectorState.update({
         where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } },
         data: { preparingSince: new Date(Date.now() - 61_000) },

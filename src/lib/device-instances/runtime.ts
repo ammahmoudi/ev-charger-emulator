@@ -201,8 +201,10 @@ async function getOrCreateEntry(instance: InstanceWithConnectors): Promise<Runti
   });
   const timeoutMs = await getOcppIntervalMs(instance.id, "ConnectionTimeOut", 60);
   await prisma.deviceInstanceConnectorState.updateMany({
+    // ConnectionTimeOut cancels a missing-cable handshake, not physical EV presence.
+    // Preserve cable-first Preparing when recreating the runtime after a long idle period.
     where: { deviceInstanceId: instance.id, status: "Preparing", preparingSince: { lte: new Date(Date.now() - timeoutMs) },
-      OR: [{ evConnected: false }, { activeIdTag: null }] },
+      evConnected: false, activeTransactionId: null },
     data: { status: "Available", locked: false, preparingSince: null, activeIdTag: null, activeStartedAt: null,
       activeTransactionId: null, activeChargeRateKw: null, activeIsRemote: false, activeStartPending: false },
   });
