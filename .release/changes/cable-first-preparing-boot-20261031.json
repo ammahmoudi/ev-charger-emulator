@@ -1,0 +1,4 @@
+{
+  "type": "patch",
+  "summary": "Preserve a long-connected car in cable-first Preparing across a cold runtime restart; EVYAR/evyar#411."
+}
