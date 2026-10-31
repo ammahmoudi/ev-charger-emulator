@@ -1,0 +1,4 @@
+{
+  "type": "patch",
+  "summary": "Keep cable-first connectors Preparing until authorization, use configured connection deadlines after authorization and reconcile plugged idle state after older timeouts."
+}

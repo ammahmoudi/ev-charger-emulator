@@ -51,7 +51,7 @@ describe("ConnectorChargeCard", () => {
       />,
     );
 
-    expect(screen.getByText("Preparing — present a card or start charging within 60 seconds.")).toBeInTheDocument();
+    expect(screen.getByText("EV connected — waiting for a card or app authorization.")).toBeInTheDocument();
     const chargingButton = screen.getByRole("button", { name: "Charging" });
     expect(chargingButton).toBeEnabled();
     fireEvent.click(chargingButton);
@@ -65,7 +65,7 @@ describe("ConnectorChargeCard", () => {
         idTag: "CARD", startedAt: now.toISOString(), chargeRateKw: 20, currentEnergyWh: 0,
       } }} now={now} pending={false} error={null} onStartCharging={noop}
       onStopCharging={onStopCharging} onClearFault={noop} />);
-    expect(screen.getByText(/connect the EV within 60 seconds/)).toBeInTheDocument();
+    expect(screen.getByText(/connect the EV/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onStopCharging).toHaveBeenCalledOnce();
   });

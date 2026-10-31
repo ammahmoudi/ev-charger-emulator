@@ -79,12 +79,13 @@ describe.skipIf(!process.env.DATABASE_URL)("configuration and status on the real
     await command("ChangeConfiguration", { key: "QRcodeConnectID1", value: "" });
     expect((await command("GetConfiguration", { key: ["QRcodeConnectID1"] })).configurationKey?.[0].value).toBe("");
   });
-  it("sends Preparing on EV connect and Available on configured timeout, without a transaction", async () => {
+  it("keeps a plugged EV Preparing beyond ConnectionTimeOut without inventing a transaction", async () => {
     await setup();
     await command("ChangeConfiguration", { key: "ConnectionTimeOut", value: "1" });
     await connectEv(instanceId, 1);
     await expect.poll(() => statuses().some((s) => s.connectorId === 1 && s.status === "Preparing")).toBe(true);
-    await expect.poll(() => statuses().filter((s) => s.connectorId === 1).at(-1)?.status, { timeout: 2500 }).toBe("Available");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(statuses().filter((s) => s.connectorId === 1).at(-1)?.status).toBe("Preparing");
     expect(frames.some((f) => f[2] === "StartTransaction")).toBe(false);
   });
   it("reports persisted Preparing on boot instead of a false Available status", async () => {
@@ -136,7 +137,7 @@ describe.skipIf(!process.env.DATABASE_URL)("configuration and status on the real
     await expect.poll(() => frames.some((f) => f[2] === "StartTransaction")).toBe(true);
     const request = frames.find((f) => f[2] === "StartTransaction")!;
     ws.send(JSON.stringify([3, request[1], { transactionId: 904, idTagInfo: { status: "Blocked" } }]));
-    expect((await start).status).toBe("Available");
+    expect((await start).status).toBe("Preparing");
     expect(statuses().some((entry) => entry.status === "Charging")).toBe(false);
     expect(await prisma.deviceInstanceEvent.count({ where: { deviceInstanceId: instanceId, type: "TRANSACTION_STARTED" } })).toBe(0);
   });
