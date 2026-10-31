@@ -43,8 +43,13 @@ describe("bounded delayed RemoteStop over native OCPP1.6 wire",()=>{
   expect((stop.payload.transactionData as Array<{timestamp:string}>)[0]!.timestamp).toBe(stop.payload.timestamp);
   expect(c.frames.some(f=>f.action==="MeterValues"&&f.at>requestedAt&&f.at<stop.at)).toBe(true);
   await until(()=>c.controller.getActiveTransaction(1)===undefined);
+  await until(()=>c.session.getConnectorStatus(1)?.status==="Available");
   expect(await c.call("RemoteStopTransaction",{transactionId:42})).toEqual({status:"Rejected"});
   expect(c.frames.filter(f=>f.action==="StopTransaction")).toHaveLength(1);
+ });
+ it('rejects a local stop naming another physical transaction without sending a stop',async()=>{
+  const c=await setup();expect(await c.controller.stopLocalTransaction(1,999,'Local')).toBe('FOREIGN_TRANSACTION');
+  expect(c.frames.filter(f=>f.action==='StopTransaction')).toHaveLength(0);expect(c.controller.getActiveTransaction(1)?.transactionId).toBe(42);
  });
  it("keeps ordinary default stopping immediate without a configured delay",async()=>{
   const c=await setup();expect(await c.call("RemoteStopTransaction",{transactionId:42})).toEqual({status:"Accepted"});

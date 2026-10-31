@@ -134,6 +134,8 @@ export interface OcppLocalAuthListStore {
 }
 
 export interface RemoteCommandHandlersDeps {
+  /** Persistent connector register in the device runtime; standalone clients keep their in-memory register. */
+  readMeterRegisterWh?: (connectorId: number) => Promise<number>;
   /** Optional bounded future absolute register observation for real-clock calendar rehearsals. */
   calendarMeterBoundaryAt?: string;
   onConfigurationChanged?: (key: string, value: string) => Promise<void>;
@@ -215,6 +217,7 @@ export interface RemoteCommandHandlers {
   /** The transaction currently tracked as active on a connector, if any. */
   getActiveTransaction(connectorId: number): OcppActiveTransaction | undefined;
   listActiveTransactions(): OcppActiveTransaction[];
+  stopLocalTransaction(connectorId: number, transactionId: number, reason: string, localCause?:string): Promise<'NOT_OWNED'|'FOREIGN_TRANSACTION'|'STOPPING'|'STOPPED'>;
   /**
    * Reservations currently tracked (not yet expired/cancelled). Async because it reads through
    * `reservationStore`, which may be a real (Prisma-backed) store.

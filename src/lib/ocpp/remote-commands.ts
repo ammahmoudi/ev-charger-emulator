@@ -220,7 +220,7 @@ export function registerRemoteCommandHandlers(
   ): Promise<{ sampledValue: Record<string, string>[]; meterWh: number }> {
     const state = transactionSimState.get(connectorId);
     if (!state) {
-      const meterWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
+      const meterWh = Math.round(deps.readMeterRegisterWh ? await deps.readMeterRegisterWh(connectorId) : meterRegisterWh.get(connectorId) ?? 0);
       return {
         meterWh,
         sampledValue: [
@@ -356,7 +356,7 @@ export function registerRemoteCommandHandlers(
       }
       if (deps.prepareStart && !(await deps.prepareStart(connectorId, idTag))) return;
       if (session.getConnectorStatus(connectorId)?.status !== "Preparing") session.setConnectorStatus(connectorId, "Preparing");
-      const meterStartWh = Math.round(meterRegisterWh.get(connectorId) ?? 0);
+      const meterStartWh = Math.round(deps.readMeterRegisterWh ? await deps.readMeterRegisterWh(connectorId) : meterRegisterWh.get(connectorId) ?? 0);
       const response = await client.call("StartTransaction", {
         connectorId,
         idTag,
@@ -449,7 +449,7 @@ export function registerRemoteCommandHandlers(
     return { status: "Accepted" };
   }
 
-  async function stopTransaction(entry: OcppActiveTransaction, reason: string): Promise<void> {
+  async function stopTransaction(entry: OcppActiveTransaction, reason: string, localCause?:string): Promise<void> {
     if (disposed || stoppingTransactions.has(entry.transactionId) || activeTransactions.get(entry.connectorId)?.transactionId !== entry.transactionId) return;
     stoppingTransactions.add(entry.transactionId);
     const pending = pendingStopTimers.get(entry.transactionId);
@@ -490,7 +490,7 @@ export function registerRemoteCommandHandlers(
     if (finishingHoldMs > 0) {
       const timer = setTimeout(() => {
         pendingFinishingTimers.delete(timer);
-        session.setConnectorStatus(entry.connectorId, "Available");
+        if(session.getConnectorStatus(entry.connectorId)?.status==="Finishing")session.setConnectorStatus(entry.connectorId, "Available");
       }, finishingHoldMs);
       pendingFinishingTimers.add(timer);
     } else {
@@ -501,7 +501,7 @@ export function registerRemoteCommandHandlers(
       try {
         await deps.onRemoteTransactionStopped(entry.connectorId, {
           transactionId: entry.transactionId,
-          reason,
+          reason: localCause ?? reason,
           // This transaction's own energy delta (meterStop minus this transaction's own
           // meterStart) — NOT the absolute cumulative register `meterStopWh` above (which is
           // what actually goes out on the wire in the real StopTransaction call, unchanged).
@@ -766,6 +766,14 @@ export function registerRemoteCommandHandlers(
   client.registerHandler("UpdateFirmware", firmwareHandlers.handleUpdateFirmware);
 
   return {
+    async stopLocalTransaction(connectorId, transactionId, reason, localCause) {
+      if(stoppingTransactions.has(transactionId)) return 'STOPPING';
+      const active=activeTransactions.get(connectorId);
+      if(!active) return 'NOT_OWNED';
+      if(active.transactionId!==transactionId)return 'FOREIGN_TRANSACTION';
+      await stopTransaction(active,reason,localCause);
+      return 'STOPPED';
+    },
     getActiveTransaction(connectorId: number): OcppActiveTransaction | undefined {
       return activeTransactions.get(connectorId);
     },

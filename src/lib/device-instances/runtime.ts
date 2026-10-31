@@ -1,6 +1,6 @@
 import { DeviceConnectionStatus, type DeviceInstance, type DeviceModel, type DeviceModelConnector } from "@prisma/client";
 
-import { adoptRemoteSession, cancelRemotePreparation, prepareRemoteStart, refreshConnectorConfiguration, stopChargingSession } from "@/lib/device-instances/connector-sessions";
+import { adoptRemoteSession, cancelRemotePreparation, prepareRemoteStart, refreshConnectorConfiguration, stopChargingSession, getMeterRegisterWh } from "@/lib/device-instances/connector-sessions";
 import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 import { drainOutbox } from "@/lib/device-instances/outbox";
 import { PrismaChargingProfileStore } from "@/lib/device-instances/prisma-charging-profile-store";
@@ -87,6 +87,7 @@ function createEntry(instance: InstanceWithConnectors, firmwareVersion: string |
 
   const remoteCommands = registerRemoteCommandHandlers(client, session, {
     configStore: new PrismaConfigurationStore(instance.id),
+    readMeterRegisterWh: connectorId => getMeterRegisterWh(instance.id,connectorId),
     onConfigurationChanged: (key) => refreshConnectorConfiguration(instance.id, key),
     prepareStart: (connectorId, idTag) => prepareRemoteStart(instance.id, connectorId, idTag),
     cancelStart: (connectorId) => cancelRemotePreparation(instance.id, connectorId),
@@ -354,4 +355,10 @@ export async function reconcileRuntimeOnStartup(): Promise<void> {
       console.error(`Failed to reconnect device instance ${id} on startup:`, err);
     }
   }
+}
+
+/** Local panel actions must finish the same OCPP transaction/meter timeline as remote commands. */
+export async function stopRuntimeTransaction(instanceId:string,connectorId:number,transactionId:number,reason:string,localCause:string){
+ const entry=registry.get(instanceId);
+ return entry ? entry.remoteCommands.stopLocalTransaction(connectorId,transactionId,reason,localCause) : 'NOT_OWNED' as const;
 }

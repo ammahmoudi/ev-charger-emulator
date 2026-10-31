@@ -7,7 +7,7 @@ import { logDeviceInstanceEvent } from "@/lib/device-instances/events";
 // bodies, never at module-evaluation time; see the two-way collision guard below.
 import { isHardwareTestOutputRunning } from "@/lib/device-instances/hardware-test-state";
 import { queueOutboxMessage } from "@/lib/device-instances/outbox";
-import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState } from "@/lib/device-instances/runtime";
+import { callOcpp, getOrCreateChargePointSession, getRuntimeConnectionState, stopRuntimeTransaction } from "@/lib/device-instances/runtime";
 import { isFaultStopCause, toOcpp16StopReason } from "@/lib/device-instances/stop-causes";
 import { prisma } from "@/lib/prisma";
 
@@ -859,7 +859,17 @@ async function getFeeRateParams(
  * a transaction id was ever minted) cancels the attempt with zero energy/cost, matching a real
  * connector being released before StartTransaction ever went out.
  */
-export async function stopChargingSession(
+const pendingLocalStops = new Map<string,Promise<StopSessionResult>>();
+/** Coalesce simultaneous panel/cable actions; the protocol mirror bypasses this gate to complete the same stop. */
+export async function stopChargingSession(deviceInstanceId:string,connectorId:number,options:Parameters<typeof stopChargingSessionInner>[2]):Promise<StopSessionResult>{
+ if(options.skipCsmsNotify)return stopChargingSessionInner(deviceInstanceId,connectorId,options);
+ const key=`${deviceInstanceId}:${connectorId}`,existing=pendingLocalStops.get(key);
+ if(existing)return existing;
+ const pending=stopChargingSessionInner(deviceInstanceId,connectorId,options);pendingLocalStops.set(key,pending);
+ try{return await pending;}finally{if(pendingLocalStops.get(key)===pending)pendingLocalStops.delete(key);}
+}
+
+async function stopChargingSessionInner(
   deviceInstanceId: string,
   connectorId: number,
   options: {
@@ -892,6 +902,21 @@ export async function stopChargingSession(
     throw new ConnectorSessionError(`Connector ${connectorId} has no session in progress`);
   }
 
+  // A remote-started transaction already owns its meter start and charging-profile timeline.
+  // Delegate its local stop instead of rebuilding a final register from unrelated history.
+  if(state.activeIsRemote && state.activeTransactionId!=null && !options.skipCsmsNotify){
+    const outcome=await stopRuntimeTransaction(deviceInstanceId,connectorId,state.activeTransactionId,toOcpp16StopReason(options.stopCause),options.stopCause);
+    if(outcome==='FOREIGN_TRANSACTION')throw new ConnectorSessionError('Active transaction identity changed');
+    if(outcome==='STOPPING')throw new ConnectorSessionError('Transaction stop is already in progress');
+    if(outcome==='STOPPED'){
+      const row=await prisma.deviceInstanceSession.findFirst({where:{deviceInstanceId,connectorId,transactionId:state.activeTransactionId,startedAt:state.activeStartedAt},orderBy:{createdAt:'desc'}});
+      if(!row)throw new ConnectorSessionError('Transaction stop confirmation is pending');
+      return {connectorId,connectorLabel:row.connectorLabel,idTag:row.idTag,transactionId:row.transactionId,
+        startedAt:row.startedAt.toISOString(),stoppedAt:row.stoppedAt.toISOString(),energyKwh:Math.round(row.energyWh)/WH_PER_KWH,
+        cost:row.cost,currency:row.currency,stopCause:row.stopCause,isFault:isFaultStopCause(row.stopCause),
+        durationSeconds:Math.round((row.stoppedAt.getTime()-row.startedAt.getTime())/1000)};
+    }
+  }
   const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
   const stoppedAt = new Date();
   const energyWh =
