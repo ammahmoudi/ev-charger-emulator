@@ -1,0 +1,4 @@
+{
+  "type": "patch",
+  "summary": "Use the same physical meter timeline for local, cable and remote stops; seed remote transactions from the persisted register and coalesce simultaneous local stops."
+}

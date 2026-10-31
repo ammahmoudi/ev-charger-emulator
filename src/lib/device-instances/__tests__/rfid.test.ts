@@ -73,7 +73,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
       await setLocalAuthListEnabled("true");
       await connectEv(instanceId, 1);
       await upsertLocalAuthEntry(instanceId, "LOCAL-CARD", "ACCEPTED");
-      expect((await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20)).status).toBe("Preparing");
+      expect((await presentRfidCard(instanceId, 1, "LOCAL-CARD", 20)).status).toBe("Charging");
     });
 
     it("ignores the local list once the switch is off: the card needs the CSMS (here: unreachable -> refused)", async () => {
@@ -92,7 +92,7 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
       instanceId = created.instance.id;
       await setLocalAuthListEnabled("false");
       await connectEv(instanceId, 1);
-      expect((await presentRfidCard(instanceId, 1, "MASTER-1", 20)).status).toBe("Preparing");
+      expect((await presentRfidCard(instanceId, 1, "MASTER-1", 20)).status).toBe("Charging");
     });
   });
 
