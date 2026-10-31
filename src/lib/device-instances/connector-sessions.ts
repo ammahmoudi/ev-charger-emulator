@@ -75,6 +75,7 @@ export interface ConnectorRuntimeView {
   status: string;
   locked: boolean;
   evConnected: boolean;
+  connectionDeadline: string | null;
   activeSession: {
     idTag: string;
     transactionId: number | null;
@@ -306,7 +307,7 @@ async function resolvePreparingPromotion(
   connectors: OrderedDeviceModelConnector[],
 ): Promise<ConnectorState | null> {
   if (state.status !== "Preparing") return null;
-  if (state.preparingSince && !(state.evConnected && state.activeIdTag) && now.getTime() - state.preparingSince.getTime() >= await getOcppIntervalMs(deviceInstanceId, "ConnectionTimeOut", PREPARING_TIMEOUT_MS / 1000)) {
+  if (state.preparingSince && state.activeIdTag && !state.evConnected && now.getTime() - state.preparingSince.getTime() >= await getOcppIntervalMs(deviceInstanceId, "ConnectionTimeOut", PREPARING_TIMEOUT_MS / 1000)) {
     const { count } = await prisma.deviceInstanceConnectorState.updateMany({
       where: { deviceInstanceId, connectorId: state.connectorId, status: "Preparing", preparingSince: state.preparingSince },
       data: { status: "Available", locked: false, activeStartPending: false, preparingSince: null, activeStartedAt: null,
@@ -501,14 +502,26 @@ export async function listConnectorStates(
   const now = new Date();
   const resolvedStates = await Promise.all(
     states.map(async (state) => {
-      const resolved = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
-      if (resolved.status === "Preparing" && resolved.preparingSince && !preparationTimers.has(`${deviceInstanceId}:${state.connectorId}`)) {
+      let resolved = (await resolvePendingPromotion(deviceInstanceId, state, now, connectors)) ?? state;
+      // A cable remains physically present after an old authorization window. Reconcile idle
+      // persisted states too, so reconnect/restart and older timeouts cannot advertise a free plug.
+      if (resolved.status === "Available" && resolved.evConnected && !resolved.activeIdTag && !resolved.activeTransactionId && !resolved.activeStartPending) {
+        const changed = await prisma.deviceInstanceConnectorState.updateMany({
+          where: { id: resolved.id, status: "Available", evConnected: true, activeIdTag: null, activeTransactionId: null, activeStartPending: false },
+          data: { status: "Preparing", preparingSince: now },
+        });
+        resolved = await getOrCreateState(deviceInstanceId, state.connectorId);
+        if (changed.count) await notifySessionStatus(deviceInstanceId, state.connectorId, "Preparing");
+      }
+      if (resolved.status === "Preparing" && resolved.activeIdTag && !resolved.evConnected && resolved.preparingSince && !preparationTimers.has(`${deviceInstanceId}:${state.connectorId}`)) {
         await schedulePreparationExpiry(deviceInstanceId, state.connectorId, resolved.preparingSince);
       }
       return resolved;
     }),
   );
   const stateByConnectorId = new Map(resolvedStates.map((s) => [s.connectorId, s]));
+  const connectionTimeoutMs = resolvedStates.some((s) => s.status === "Preparing" && s.activeIdTag && !s.evConnected)
+    ? await getOcppIntervalMs(deviceInstanceId, "ConnectionTimeOut", PREPARING_TIMEOUT_MS / 1000) : null;
 
   return connectors.map((connector) => {
     const connectorId = connector.connectorId;
@@ -531,6 +544,8 @@ export async function listConnectorStates(
       status: state?.status ?? "Available",
       locked: state?.locked ?? false,
       evConnected: state?.evConnected ?? false,
+      connectionDeadline: state?.status === "Preparing" && state.activeIdTag && !state.evConnected && state.preparingSince && connectionTimeoutMs !== null
+        ? new Date(state.preparingSince.getTime() + connectionTimeoutMs).toISOString() : null,
       activeSession,
     };
   });
@@ -610,7 +625,6 @@ export async function connectEv(deviceInstanceId: string, connectorId: number): 
     const label = labelForConnector(connectors, connectorId) ?? `Connector ${connectorId}`;
     await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label}: EV connected`);
     if (promoteToPreparing) {
-      await schedulePreparationExpiry(deviceInstanceId, connectorId);
       await notifySessionStatus(deviceInstanceId, connectorId, "Preparing");
     }
   }
@@ -703,7 +717,7 @@ export async function startChargingSession(
     data: {
       status: "Preparing",
       locked: true,
-      preparingSince: state.preparingSince ?? now,
+      preparingSince: now,
       activeIsRemote: options.remotePending ?? false,
       activeStartPending: false,
       activeIdTag: options.idTag,
@@ -715,7 +729,7 @@ export async function startChargingSession(
 
   if (!count) throw new ConnectorSessionError(`Connector ${connectorId} is no longer ready to start`);
 
-  await schedulePreparationExpiry(deviceInstanceId, connectorId, state.preparingSince ?? now);
+  await schedulePreparationExpiry(deviceInstanceId, connectorId, now);
   await logDeviceInstanceEvent(deviceInstanceId, "STATUS_CHANGE", `${label} status changed to Preparing`, startedAt);
   await notifySessionStatus(deviceInstanceId, connectorId, "Preparing");
 
@@ -725,12 +739,15 @@ export async function startChargingSession(
 
 /** Releases a remote attempt that failed, was reset, or lost its connection. */
 export async function cancelRemotePreparation(deviceInstanceId: string, connectorId: number): Promise<void> {
+  const state = await prisma.deviceInstanceConnectorState.findUnique({ where: { deviceInstanceId_connectorId: { deviceInstanceId, connectorId } } });
+  if (!state) return;
+  const status = state.evConnected ? "Preparing" : "Available";
   const { count } = await prisma.deviceInstanceConnectorState.updateMany({
-    where: { deviceInstanceId, connectorId, status: "Preparing", activeIsRemote: true, activeTransactionId: null },
-    data: { status: "Available", locked: false, activeStartPending: false, preparingSince: null, activeStartedAt: null,
+    where: { deviceInstanceId, connectorId, status: "Preparing", activeIsRemote: true, activeTransactionId: null, evConnected: state.evConnected },
+    data: { status, locked: false, activeStartPending: false, preparingSince: state.evConnected ? new Date() : null, activeStartedAt: null,
       activeIdTag: null, activeChargeRateKw: null, activeIsRemote: false },
   });
-  if (count) await notifySessionStatus(deviceInstanceId, connectorId, "Available");
+  if (count) await notifySessionStatus(deviceInstanceId, connectorId, status);
 }
 
 /** Waits for a physical EV after remote authorization, without opening a transaction. */

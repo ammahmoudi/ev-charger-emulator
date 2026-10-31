@@ -32,13 +32,13 @@ describe.skipIf(!process.env.DATABASE_URL)("Preparing handshake regression", () 
     });
     return connector();
   }
-  it.each(["card", "EV"])("expires an incomplete %s-first attempt with no transaction or energy", async (first) => {
+  it.each(["card", "EV"])("keeps EV presence while expiring only an unconnected %s-first authorization", async (first) => {
     await setup();
     if (first === "card") await presentRfidCard(instanceId, 1, "MASTER-TEST", 20);
     else await connectEv(instanceId, 1);
     expect((await connector()).status).toBe("Preparing");
     const idle = await expire();
-    expect(idle.status).toBe("Available");
+    expect(idle.status).toBe(first === "EV" ? "Preparing" : "Available");
     expect(idle.activeSession).toBeNull();
     expect(idle.locked).toBe(false);
     expect(idle.evConnected).toBe(first === "EV");
@@ -48,6 +48,24 @@ describe.skipIf(!process.env.DATABASE_URL)("Preparing handshake regression", () 
     } else {
       expect((await presentRfidCard(instanceId, 1, "MASTER-TEST", 20)).status).toBe("Charging");
     }
+  });
+  it("repairs a plugged idle connector after an old timeout or process restart", async () => {
+    await setup();
+    await connectEv(instanceId, 1);
+    await prisma.deviceInstanceConnectorState.update({ where: { deviceInstanceId_connectorId: { deviceInstanceId: instanceId, connectorId: 1 } }, data: { status: "Available", preparingSince: null } });
+    expect(await connector()).toMatchObject({ status: "Preparing", evConnected: true, activeSession: null, connectionDeadline: null });
+    expect(await prisma.deviceInstanceSession.count({ where: { deviceInstanceId: instanceId } })).toBe(0);
+  });
+  it("uses configured connection timeout only after authorization", async () => {
+    await setup();
+    await prisma.deviceInstanceOcppConfiguration.create({ data: { deviceInstanceId: instanceId, key: "ConnectionTimeOut", value: "120" } });
+    const before = Date.now();
+    const pending = await startChargingSession(instanceId, 1, { idTag: "CARD", chargeRateKw: 20 });
+    expect(Date.parse(pending.connectionDeadline!) - before).toBeGreaterThan(119000);
+    expect(Date.parse(pending.connectionDeadline!) - before).toBeLessThanOrEqual(121000);
+    const connected = await connectEv(instanceId, 1);
+    expect(connected.connectionDeadline).toBeNull();
+    expect(connected.status).toBe("Charging");
   });
   it("accepts the second action just before the deadline and starts the energy clock there", async () => {
     await setup();

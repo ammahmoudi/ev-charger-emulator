@@ -16,6 +16,7 @@ export interface ChargeCardRuntime {
   status: string;
   locked: boolean;
   evConnected: boolean;
+  connectionDeadline?: string | null;
   activeSession: {
     idTag: string;
     startedAt: string;
@@ -118,13 +119,15 @@ export function ConnectorChargeCard({
   const evConnected = runtime?.evConnected ?? false;
   const isPreparing = status === "Preparing" && session !== null;
   const isCharging = status === "Charging" && session !== null;
+  const connectionSeconds = runtime?.connectionDeadline
+    ? Math.max(0, Math.ceil((Date.parse(runtime.connectionDeadline) - now.getTime()) / 1000)) : null;
   const isFaulted = status === "Faulted";
 
   const idleText = status === "Finishing"
     ? "Finishing charge…"
     : evConnected
       ? status === "Preparing"
-        ? "Preparing — present a card or start charging within 60 seconds."
+        ? "EV connected — waiting for a card or app authorization."
         : "EV connected — click Charging to start."
       : "Please connect the EV or click charging button.";
   const charging = "w-full rounded-[6px] py-[10px] text-[34px] font-semibold leading-none text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.12)] disabled:cursor-not-allowed";
@@ -151,8 +154,8 @@ export function ConnectorChargeCard({
       <div className="mt-[18px] flex min-h-[78px] flex-col items-center justify-center text-center text-[24px] leading-[30px] text-[#222]">
         {isPreparing && session ? (
           <>
-            <p className="font-medium text-amber-600">Preparing — {evConnected ? "starting charge…" : "connect the EV within 60 seconds."}</p>
-            <p className="font-mono text-[20px] text-zinc-500">{formatElapsed(session.startedAt, now)}</p>
+            <p className="font-medium text-amber-600">Preparing — {evConnected ? "starting charge…" : "connect the EV."}</p>
+            <p className="font-mono text-[20px] text-zinc-500">{!evConnected && connectionSeconds !== null ? `${connectionSeconds}s to connect` : "Waiting for charger confirmation…"}</p>
           </>
         ) : isCharging && session ? (
           <>
