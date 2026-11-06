@@ -134,19 +134,22 @@ export function ConnectorChargeCard({
       <ShieldBadge letter={badgeLetter(connector.label, connector.connectorId)} />
       <span className="absolute right-[22px] top-[18px] text-[26px] text-[#555]">{connector.connectorType}</span>
 
-      <ConnectorGlyph
-        className={`mx-auto mt-[2px] h-[168px] w-[134px] ${
-          isCharging
-            ? "text-emerald-500"
-            : status === "Preparing"
-              ? "text-amber-500 animate-pulse"
-              : isFaulted
-                ? "text-red-400"
-                : evConnected
-                  ? "text-sky-400"
-                  : "text-[#b9b9b9]"
-        }`}
-      />
+      {isFaulted ? (
+        <svg aria-hidden="true" viewBox="0 0 120 104" className="mx-auto mt-[2px] h-[168px] w-[190px] text-red-600">
+          <path d="M51 9a10 10 0 0 1 18 0l49 80a9 9 0 0 1-8 14H10a9 9 0 0 1-8-14Z" fill="currentColor" />
+          <path d="M60 32v32" stroke="white" strokeWidth="8" strokeLinecap="round" />
+          <circle cx="60" cy="83" r="5" fill="white" />
+        </svg>
+      ) : !session && status === "Available" ? (
+        <svg aria-hidden="true" viewBox="0 0 280 110" className="mx-auto mt-[2px] h-[168px] w-[260px] text-sky-700" fill="none" stroke="currentColor" strokeWidth="4" strokeLinejoin="round">
+          <path d="m18 60 12-28h67l14 28m-93 0h93v31H18z" fill="currentColor" fillOpacity=".12" />
+          <path d="M29 73h14m44 0h14M25 92v9m79-9v9M34 43h60" strokeLinecap="round" />
+          <rect x="201" y="10" width="53" height="92" rx="7" fill="currentColor" fillOpacity=".12" />
+          <path d="m231 28-12 24h16l-12 24m-22-52h-11v43a14 14 0 0 1-28 0V53m-17-14 20 9-8 16-20-9zM139 56l-12 14" />
+        </svg>
+      ) : (
+        <ConnectorGlyph className={`mx-auto mt-[2px] h-[168px] w-[134px] ${isCharging ? "text-emerald-500" : status === "Preparing" ? "text-amber-500 animate-pulse" : evConnected ? "text-sky-400" : "text-[#b9b9b9]"}`} />
+      )}
 
       <div className="mt-[18px] flex min-h-[78px] flex-col items-center justify-center text-center text-[24px] leading-[30px] text-[#222]">
         {isPreparing && session ? (
