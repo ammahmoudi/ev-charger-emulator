@@ -9,7 +9,7 @@ import { Car } from "./Car";
 import { Station, FASCIA_X, FRONT_Z, SCREEN_Y } from "./Station";
 import type { TwinPlug } from "./useTwinData";
 
-export type CameraPreset = "overview" | "screen" | "plugA" | "plugB";
+export type CameraPreset = "overview" | "cabinet" | "screen" | "plugA" | "plugB";
 
 export const PARK_X: [number, number] = [-3.55, 3.55];
 const CAR_COLORS = ["#2563eb", "#e2e8f0"];
@@ -17,6 +17,7 @@ const CAR_COLORS = ["#2563eb", "#e2e8f0"];
 /** [camera position, look-at target] */
 const PRESETS: Record<CameraPreset, [[number, number, number], [number, number, number]]> = {
   overview: [[0.9, 2.3, 13.4], [0, 0.95, 0]],
+  cabinet: [[2.45, 1.85, 3.1], [0, 1.02, 0]],
   screen: [[FASCIA_X, SCREEN_Y, FRONT_Z + 0.62], [FASCIA_X, SCREEN_Y, 0.1]],
   plugA: [[-4.3, 1.5, 4.6], [-2.35, 0.95, 0.9]],
   plugB: [[4.3, 1.5, 4.6], [2.35, 0.95, 0.9]],

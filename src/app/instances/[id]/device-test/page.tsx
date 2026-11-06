@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { getBmsReadouts } from "@/lib/device-instances/bms-readouts";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -60,9 +61,9 @@ export default function DeviceTestPage() {
   }, [instanceId]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch + poll, not derived state
-    load();
-    pollRef.current = setInterval(load, POLL_INTERVAL_MS);
+    const refresh = () => load().catch(() => setError("Unable to load hardware test state. Retrying…"));
+    refresh();
+    pollRef.current = setInterval(refresh, POLL_INTERVAL_MS);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
@@ -84,6 +85,8 @@ export default function DeviceTestPage() {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Action failed");
       }
+    } catch {
+      setError("Unable to reach the device. Please try again.");
     } finally {
       setPending(false);
     }
@@ -105,6 +108,8 @@ export default function DeviceTestPage() {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Failed to update settings");
       }
+    } catch {
+      setError("Unable to reach the device. Please try again.");
     } finally {
       setPending(false);
     }
@@ -124,7 +129,7 @@ export default function DeviceTestPage() {
   if (!state) {
     return (
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <p role="status" className="text-sm text-zinc-500">{error ?? "Loading…"}</p>
       </div>
     );
   }
@@ -145,7 +150,7 @@ export default function DeviceTestPage() {
         <DeviceHeaderBar instanceId={instanceId} title={instanceName ?? "Device (hardware test)"} />
 
         <ScreenPanel>
-          {error ? <p className="px-4 pt-1 text-[18px] text-[#e5302b]">{error}</p> : null}
+          {error ? <p role="alert" className="px-4 pt-1 text-[18px] text-[#e5302b]">{error}</p> : null}
           <TabStrip tabs={tabs} active={tab} onSelect={setTab} />
           <div className="min-h-0 flex-1 overflow-y-auto px-[14px] pt-[10px]">
           {tab === "chargingTest" ? (
@@ -154,6 +159,7 @@ export default function DeviceTestPage() {
             <PileTestTab state={state} pending={pending} runAction={runAction} />
           ) : (
             <PlugTestTab
+              key={tab}
               plug={state.plugs.find((p) => `plug:${p.connectorId}` === tab)!}
               pending={pending}
               runAction={runAction}
@@ -258,20 +264,53 @@ function ChargingTestTab({
 }
 
 function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestState }) {
+  const [page, setPage] = useState(0);
+  const bmsPages = getBmsReadouts(plug);
   return (
-    <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-2 ">
-        <Readout label="CC1 status" value={plug.cc1} />
-        <Readout label="CC2 status" value={plug.cc2} />
-        <Readout label="KM1 status" value={plug.km1} />
-        <Readout label="KM2 status" value={plug.km2} />
-        <Readout label="Plug position" value={plug.plugPosition} />
-        <Readout label="Fuse status" value={plug.fuseStatus} />
-        <Readout label="Assist power supply status" value={plug.assistPowerStatus} />
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[16px] text-slate-600">{page === 0 ? "Hardware controls" : `BMS · ${page === 1 ? "Battery parameters" : "Charging demand"}`} · Simulated test data</span>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setPage(page === 0 ? 1 : 0)} className="rounded border border-sky-700 px-3 py-1 text-[18px] text-sky-800 hover:bg-white">{page === 0 ? "BMS" : "Hardware"}</button>
+          <button type="button" aria-label="Previous plug test page" disabled={page === 0} onClick={() => setPage(page - 1)} className="h-10 w-10 rounded text-xl text-sky-700 hover:bg-white disabled:opacity-30">‹</button>
+          <span className="text-[18px] tabular-nums">{page + 1} / 3</span>
+          <button type="button" aria-label="Next plug test page" disabled={page === 2} onClick={() => setPage(page + 1)} className="h-10 w-10 rounded text-xl text-sky-700 hover:bg-white disabled:opacity-30">›</button>
+        </div>
+      </div>
+      {page > 0 ? (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {bmsPages[page - 1].map((rows, index) => (
+            <dl key={index} className="overflow-hidden rounded border border-slate-300 bg-white/60">
+              {rows.map((row) => (
+                <div key={row.label} className="grid min-h-[45px] grid-cols-[1fr_auto] items-center gap-3 border-b border-slate-200 px-3 py-1 last:border-0">
+                  <dt className="text-[20px] leading-[22px]">{row.label}:</dt>
+                  <dd className="min-w-8 text-right font-mono text-[28px] tabular-nums text-slate-800">{row.value || "—"}</dd>
+                </div>
+              ))}
+            </dl>
+          ))}
+        </div>
+      ) : <PlugHardwarePanel plug={plug} pending={pending} runAction={runAction} />}
+    </div>
+  );
+}
+
+function PlugHardwarePanel({ plug, pending, runAction }: TabProps & { plug: PlugTestState }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="flex flex-col">
+        <Readout compact label="CC1 status" value={plug.cc1} />
+        <Readout compact label="CC2 status" value={plug.cc2} />
+        <Readout compact label="KM1 status" value={plug.km1} />
+        <Readout compact label="KM2 status" value={plug.km2} />
+        <Readout compact label="Plug position" value={plug.plugPosition} />
+        <Readout compact label="Fuse status" value={plug.fuseStatus} />
+        <Readout compact label="Assist power supply status" value={plug.assistPowerStatus} />
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-[#e3e6ea] pt-[10px]">
+      <div className="flex flex-col justify-center gap-5 px-2">
         <ActionButtonGroup
+          compact
           label="Contactor action"
           disabled={pending}
           activeValue={plug.outputRunning ? "start" : "stop"}
@@ -282,6 +321,7 @@ function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestSt
           onAction={(value) => runAction({ kind: "contactor", connectorId: plug.connectorId, action: value })}
         />
         <ActionButtonGroup
+          compact
           label="Auxiliary power action"
           disabled={pending}
           activeValue={plug.auxPowerMode === "Off" ? "stop" : plug.auxPowerMode}
@@ -293,6 +333,7 @@ function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestSt
           onAction={(value) => runAction({ kind: "auxPower", connectorId: plug.connectorId, action: value })}
         />
         <ActionButtonGroup
+          compact
           label="Electronic lock action"
           disabled={pending}
           activeValue={plug.lockStatus === "Locked" ? "start" : "stop"}
@@ -302,17 +343,18 @@ function PlugTestTab({ plug, pending, runAction }: TabProps & { plug: PlugTestSt
           ]}
           onAction={(value) => runAction({ kind: "lock", connectorId: plug.connectorId, action: value })}
         />
+        <Readout compact label="CC voltage" value={plug.ccVoltageV.toFixed(2)} unit="V" />
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-t border-zinc-200 pt-4  dark:border-zinc-800">
-        <Readout label="Electronic lock status" value={plug.lockStatus} />
-        <Readout label="Meter status" value={plug.meterStatus} />
-        <Readout label="Communication status" value={plug.commStatus} />
-        <Readout label="Insulation resistance" value={plug.insulationResistanceKOhm} unit="kΩ" />
-        <Readout label="Interface temperature 1" value={plug.interfaceTemp1C} unit="°C" />
-        <Readout label="Interface temperature 2" value={plug.interfaceTemp2C} unit="°C" />
-        <Readout label="AD sampling voltage" value={plug.adSamplingVoltageV} unit="V" />
-        <Readout label="CC voltage" value={plug.ccVoltageV} unit="V" />
+      <div className="flex flex-col">
+        <Readout compact label="Electronic lock status" value={plug.lockStatus} />
+        <Readout compact label="Meter status" value={plug.meterStatus} />
+        <Readout compact label="Communication status" value={plug.commStatus} />
+        <Readout compact label="Insulation resistance" value={plug.insulationResistanceKOhm} unit="kΩ" />
+        <Readout compact label="Interface temperature 1" value={plug.interfaceTemp1C} unit="°C" />
+        <Readout compact label="Interface temperature 2" value={plug.interfaceTemp2C} unit="°C" />
+        <Readout compact label="AD sampling voltage" value={plug.adSamplingVoltageV} unit="V" />
+
       </div>
     </div>
   );

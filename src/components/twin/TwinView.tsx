@@ -15,6 +15,7 @@ const TwinScene = dynamic(() => import("./TwinScene"), {
 
 const PRESET_LABELS: [CameraPreset, string][] = [
   ["overview", "Overview"],
+  ["cabinet", "Charger body"],
   ["screen", "Screen"],
   ["plugA", "Plug A"],
   ["plugB", "Plug B"],
@@ -97,7 +98,7 @@ export function TwinView({ instanceId }: { instanceId: string }) {
         {host ? <TwinScene instanceId={instanceId} plugs={plugs} preset={preset} onToggleEv={setEv} portal={portal} lowQuality={lowQuality} /> : null}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-5">
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-start justify-between gap-3 p-5">
         <div className="pointer-events-auto flex flex-col gap-1">
           <Link href={`/instances/${instanceId}`} className="text-xs text-slate-400 hover:text-slate-200">
             ← 2D device view
@@ -109,7 +110,7 @@ export function TwinView({ instanceId }: { instanceId: string }) {
           </p>
         </div>
 
-        <div className="pointer-events-auto flex gap-1 rounded-full border border-white/10 bg-slate-900/70 p-1 backdrop-blur-xl">
+        <div className="pointer-events-auto flex flex-wrap gap-1 rounded-2xl border border-white/10 bg-slate-900/70 p-1 backdrop-blur-xl">
           {PRESET_LABELS.map(([key, label]) => (
             <button
               key={key}
@@ -123,7 +124,7 @@ export function TwinView({ instanceId }: { instanceId: string }) {
         </div>
       </div>
 
-      <div className={`pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-center gap-4 p-5 transition-all duration-500 ${preset === "screen" ? "translate-y-[110%] opacity-0" : ""}`}>
+      <div className={`pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-center gap-4 p-5 transition-all duration-500 ${(preset === "screen" || preset === "cabinet") ? "translate-y-[110%] opacity-0" : ""}`}>
         {plugs.slice(0, 2).map((p) => (
           <div key={p.connectorId} className="pointer-events-auto">
             <PlugCard plug={p} pending={pending === p.connectorId} onSet={(c) => setEv(p.connectorId, c)} />
