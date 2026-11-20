@@ -37,6 +37,9 @@ export async function POST(request: Request) {
   if (typeof deviceModelId !== "string" || !deviceModelId) return badRequest("deviceModelId is required");
   if (typeof name !== "string" || !name.trim()) return badRequest("name is required");
   if (typeof chargePointId !== "string" || !chargePointId.trim()) return badRequest("chargePointId is required");
+  if (chargePointId.trim().length > 25) {
+    return badRequest("Device serial must be at most 25 characters for OCPP 1.6", "chargePointId");
+  }
   if (typeof csmsUrl !== "string" || !csmsUrl.trim()) return badRequest("csmsUrl is required");
   if (!isValidWebSocketUrl(csmsUrl)) return badRequest("csmsUrl must be a ws:// or wss:// URL", "csmsUrl");
   if (body.masterCardIdTag !== undefined && typeof body.masterCardIdTag !== "string") {

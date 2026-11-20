@@ -46,6 +46,11 @@ create the instance and editable afterwards from its **Networks** tab. It's stor
 instance and read at connect time — there's no global/env-configured CSMS endpoint, so one running
 app can have different instances pointed at different CSMS dev/staging environments at once.
 
+The **Device serial (SN)** is separate from that URL's connection identity. It is sent as
+`BootNotification.chargePointSerialNumber` and must be at most 25 characters for OCPP 1.6.
+Do not paste a longer CSMS connection token into the serial field. Saving a changed serial or
+CSMS URL stops the instance's cached connection; the next start rebuilds it with the saved values.
+
 ## Local development
 
 The primary, documented way to run this locally is `npm run dev` against Postgres in Docker:

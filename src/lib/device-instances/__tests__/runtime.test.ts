@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 
+import { PATCH } from "@/app/api/device-instances/[id]/route";
+import { POST } from "@/app/api/device-instances/route";
 import { queueOutboxMessage } from "../outbox";
 import { disposeDeviceInstance, getRuntimeConnectionState, reconcileRuntimeOnStartup, startDeviceInstance } from "../runtime";
 import { MockCsmsServer } from "@/lib/ocpp/__tests__/mock-csms-server";
@@ -69,6 +71,56 @@ describe.skipIf(!process.env.DATABASE_URL)("runtime (integration)", () => {
       expect(action).toBe("BootNotification");
       expect((payload as { chargePointVendor: string }).chargePointVendor).toBe("TESTBRAND");
     } finally {
+      await server.close();
+    }
+  });
+
+  it("validates serial length and rebuilds BootNotification after a serial-only edit", async () => {
+    const server = await MockCsmsServer.start();
+    try {
+      const created = await createTestModelAndInstance({ csmsUrl: server.url });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+      await startDeviceInstance(instanceId);
+      const originalSocket = await server.waitForConnection();
+      const originalQueue = createMessageQueue(originalSocket);
+      const [, bootId, , originalBoot] = await originalQueue.nextByAction("BootNotification");
+      expect((originalBoot as { chargePointSerialNumber: string }).chargePointSerialNumber).toBe(created.instance.chargePointId);
+      originalSocket.send(JSON.stringify([3, bootId, { status: "Accepted", interval: 300, currentTime: new Date().toISOString() }]));
+
+      const invalidSerial = "X".repeat(26);
+      const invalidCreate = await POST(new Request("http://localhost/api/device-instances", {
+        method: "POST",
+        body: JSON.stringify({ deviceModelId: deviceModel.id, name: "Invalid serial", chargePointId: invalidSerial, csmsUrl: server.url }),
+      }));
+      expect(invalidCreate.status).toBe(400);
+      expect((await invalidCreate.json()).field).toBe("chargePointId");
+      const invalidUpdate = await PATCH(new Request(`http://localhost/api/device-instances/${instanceId}`, {
+        method: "PATCH", body: JSON.stringify({ chargePointId: invalidSerial }),
+      }), { params: Promise.resolve({ id: instanceId }) });
+      expect(invalidUpdate.status).toBe(400);
+      expect((await invalidUpdate.json()).field).toBe("chargePointId");
+      expect((await prisma.deviceInstance.findUniqueOrThrow({ where: { id: instanceId } })).chargePointId).toBe(created.instance.chargePointId);
+      expect(originalSocket.readyState).toBe(1);
+
+      const originalClosed = new Promise<void>((resolve) => originalSocket.once("close", () => resolve()));
+      const update = await PATCH(new Request(`http://localhost/api/device-instances/${instanceId}`, {
+        method: "PATCH", body: JSON.stringify({ chargePointId: "QA-SERIAL-UPDATED", csmsUrl: server.url }),
+      }), { params: Promise.resolve({ id: instanceId }) });
+      expect(update.status).toBe(200);
+      const updated = (await update.json()).instance;
+      expect(updated.status).toBe("DISCONNECTED");
+      expect(updated.csmsUrl).toBe(server.url);
+      await originalClosed;
+
+      const nextConnection = server.waitForNextConnection();
+      await startDeviceInstance(instanceId);
+      const replacementSocket = await nextConnection;
+      const replacementQueue = createMessageQueue(replacementSocket);
+      const [, , , replacementBoot] = await replacementQueue.nextByAction("BootNotification");
+      expect((replacementBoot as { chargePointSerialNumber: string }).chargePointSerialNumber).toBe("QA-SERIAL-UPDATED");
+    } finally {
+      if (instanceId) disposeDeviceInstance(instanceId);
       await server.close();
     }
   });

@@ -1,0 +1,4 @@
+{
+  "type": "patch",
+  "summary": "Validate OCPP 1.6 device serial length and rebuild cached connections after serial edits so the next BootNotification uses the saved identity."
+}
