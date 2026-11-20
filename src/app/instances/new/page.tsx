@@ -133,14 +133,16 @@ export default function NewInstancePage() {
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Charge point ID</label>
+          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Device serial (SN)</label>
           <input
             required
+            maxLength={25}
             value={chargePointId}
             onChange={(e) => setChargePointId(e.target.value)}
             placeholder="e.g. CP-001"
             className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
           />
+          <p className="text-xs text-zinc-500">Up to 25 characters, sent in BootNotification. The connection identity belongs in the WebSocket URL below.</p>
           {fieldErrors.chargePointId ? (
             <p className="text-xs text-red-600 dark:text-red-400">{fieldErrors.chargePointId}</p>
           ) : null}

@@ -59,6 +59,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       return badRequest("chargePointId must be a non-empty string");
     }
     data.chargePointId = body.chargePointId.trim();
+    if (data.chargePointId.length > 25) {
+      return badRequest("Device serial must be at most 25 characters for OCPP 1.6", "chargePointId");
+    }
   }
   if (body.csmsUrl !== undefined) {
     if (typeof body.csmsUrl !== "string" || !isValidWebSocketUrl(body.csmsUrl)) {
@@ -71,17 +74,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     data.masterCardIdTag = body.masterCardIdTag.trim() || null;
   }
 
-  // Changing the CSMS URL invalidates any runtime client already bound to the old one — drop
-  // it so the next start rebuilds against the new URL instead of silently reconnecting to the old.
-  // disposeDeviceInstance() closes the socket without writing DeviceInstance.status (it's a
-  // "manually stopped" teardown, which suppresses the client's own disconnect-status write), so
-  // without this the UI would keep showing CONNECTED/CONNECTING against a socket that's actually
-  // been torn down until the user separately stops/starts the instance.
-  if (data.csmsUrl !== undefined && data.csmsUrl !== existing.csmsUrl) {
+  // Runtime clients retain both the WebSocket URL and BootNotification serial.
+  // Rebuild either binding on the next start; disposal itself does not persist status.
+  const csmsUrlChanged = data.csmsUrl !== undefined && data.csmsUrl !== existing.csmsUrl;
+  const serialChanged = data.chargePointId !== undefined && data.chargePointId !== existing.chargePointId;
+  if (csmsUrlChanged || serialChanged) {
     disposeDeviceInstance(id);
     if (existing.status !== DeviceConnectionStatus.DISCONNECTED) {
       data.status = DeviceConnectionStatus.DISCONNECTED;
-      data.statusReason = "CSMS URL changed — restart the instance to reconnect";
+      data.statusReason = csmsUrlChanged
+        ? "CSMS URL changed — restart the instance to reconnect"
+        : "Device serial changed — restart the instance to reconnect";
     }
   }
 
