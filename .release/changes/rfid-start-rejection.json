@@ -1,0 +1,4 @@
+{
+  "type": "patch",
+  "summary": "Report a CSMS-rejected online RFID start to the charging UI instead of returning success with an idle connector; preserve pending EV-first/card-first handshakes and local-card behavior."
+}

@@ -144,4 +144,40 @@ describe.skipIf(!process.env.DATABASE_URL)("presentRfidCard (integration)", () =
       await server.close();
     }
   });
+
+  it("reports an online StartTransaction rejection instead of accepting an idle connector", async () => {
+    const server = await MockCsmsServer.start();
+    try {
+      const created = await createTestModelAndInstance({ masterCardIdTag: "MASTER-1", csmsUrl: server.url });
+      deviceModel = created.deviceModel;
+      instanceId = created.instance.id;
+      await startDeviceInstance(instanceId);
+      const serverSocket = await server.waitForConnection();
+      const queue = createMessageQueue(serverSocket);
+      await queue.next(); // Automatic BootNotification.
+      await connectEv(instanceId, 1);
+
+      const outcome = presentRfidCard(instanceId, 1, "VISITOR-DENIED", 15).then(
+        (view) => ({ view, error: null }),
+        (error: unknown) => ({ view: null, error }),
+      );
+      const [, authId, authAction] = await queue.next();
+      expect(authAction).toBe("Authorize");
+      serverSocket.send(JSON.stringify([3, authId, { idTagInfo: { status: "Accepted" } }]));
+      const [, startId, startAction] = await queue.next();
+      expect(startAction).toBe("StartTransaction");
+      serverSocket.send(JSON.stringify([3, startId, { idTagInfo: { status: "Invalid" }, transactionId: 0 }]));
+
+      const result = await outcome;
+      expect(result.error).toBeInstanceOf(RfidError);
+      expect(result.error).toMatchObject({ message: expect.stringContaining("did not start charging") });
+      expect(result.view).toBeNull();
+      const state = (await listConnectorStates(instanceId)).find((c) => c.connectorId === 1);
+      expect(state?.status).toBe("Preparing");
+      expect(state?.activeSession).toBeNull();
+      expect(await prisma.deviceInstanceSession.count({ where: { deviceInstanceId: instanceId } })).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
 });
