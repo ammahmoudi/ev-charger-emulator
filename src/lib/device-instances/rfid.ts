@@ -42,5 +42,9 @@ export async function presentRfidCard(
     throw new RfidError(`Card rejected by CSMS (${authStatus ?? "no response"})`);
   }
 
-  return startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
+  const connector = await startChargingSession(deviceInstanceId, connectorId, { idTag, chargeRateKw });
+  if (connector.evConnected && !connector.activeSession) {
+    throw new RfidError("The CSMS did not start charging. Check the station events before trying again.");
+  }
+  return connector;
 }

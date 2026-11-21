@@ -51,6 +51,12 @@ The **Device serial (SN)** is separate from that URL's connection identity. It i
 Do not paste a longer CSMS connection token into the serial field. Saving a changed serial or
 CSMS URL stops the instance's cached connection; the next start rebuilds it with the saved values.
 
+An ordinary online RFID card must pass both `Authorize` and `StartTransaction`.
+If the CSMS refuses the start, the UI reports failure rather than treating an idle,
+plugged-in connector as a successful session. An accepted card awaiting EV plug-in
+remains a pending handshake, not a charging session. Inspect the owner/protocol
+events before retrying a refused or uncertain start.
+
 ## Local development
 
 The primary, documented way to run this locally is `npm run dev` against Postgres in Docker:
